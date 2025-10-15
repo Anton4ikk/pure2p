@@ -78,15 +78,15 @@ sequenceDiagram
 
 ### ⚠️ Limitations
 - **Delivery delays**: requires simultaneous online presence.
-- **No push notifications** (mobile OS require central push services).
+- **No push notifications** (mobile OSes require central push services).
 - Sleeping devices = unreachable.
 - Device loss = history loss.
 
 ---
 
 ## 📱 Mobile & Desktop Constraints
-- Mobile OS (iOS, Android): apps **cannot wake up** on external request.
-- Notification = only when user **manually launches the app**, and peer is online.
+- Mobile OSes (iOS, Android): apps **cannot wake up** on external request.
+- Notifications appear only when the user **manually launches the app** and their peer is online.
 - Desktop: suspended/sleeping devices are equally unavailable.
 
 ---
@@ -95,7 +95,7 @@ sequenceDiagram
 Pure2P **intentionally rejects** common trade-offs:
 - No DHTs, bootstrap servers, or neighbor relaying.
 - No trusted push gateways.
-- Unlike Signal, Telegram, Matrix — Pure2P removes server reliance entirely.
+- Unlike Signal, Telegram, and Matrix — Pure2P removes server reliance entirely.
 
 ---
 
