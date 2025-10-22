@@ -2,6 +2,8 @@
 
 This guide provides instructions for setting up the Pure2P development environment and running tests.
 
+> **Quick Links**: [README](README.md) • [Quick Start](QUICKSTART.md) • [Roadmap](ROADMAP.md) • [Claude Docs](CLAUDE.md)
+
 ## Prerequisites
 
 ### Required Tools
@@ -67,7 +69,12 @@ cargo check
 
 # Run all tests
 cargo test
+
+# Try the CLI
+cargo run --bin pure2p-cli
 ```
+
+See [QUICKSTART.md](QUICKSTART.md) for your first P2P message tutorial.
 
 ## Running Tests
 
@@ -182,15 +189,23 @@ git push origin feature/your-feature-name
 ```
 pure2p/
 ├── src/
-│   ├── lib.rs          # Library entry point
+│   ├── lib.rs          # Library entry point and error types
 │   ├── crypto.rs       # Cryptographic operations (Ed25519, UIDs)
-│   ├── transport.rs    # Network transport layer
-│   ├── storage.rs      # Local data storage
-│   └── queue.rs        # Message queue management
+│   ├── protocol.rs     # MessageEnvelope, CBOR/JSON serialization
+│   ├── transport.rs    # HTTP/1.1 server/client, POST /output endpoint
+│   ├── storage.rs      # Local data storage (stub for v0.2)
+│   ├── queue.rs        # SQLite message queue with exponential backoff
+│   └── bin/
+│       └── cli.rs      # Command-line client (netcat-style)
 ├── Cargo.toml          # Project dependencies and metadata
-├── DEVELOPMENT.md      # This file
-└── README.md           # Project overview
+├── README.md           # User documentation and project overview
+├── QUICKSTART.md       # Get started with CLI in 5 minutes
+├── DEVELOPMENT.md      # This file - dev setup and workflow
+├── ROADMAP.md          # Version timeline and planned features
+└── CLAUDE.md           # Architecture details for AI assistants
 ```
+
+> **Implementation details**: See [CLAUDE.md](CLAUDE.md#core-modules) for detailed module documentation.
 
 ## Common Commands Reference
 
@@ -219,7 +234,12 @@ pure2p::init(); // Initializes tracing subscriber
 # Set log level via environment variable
 RUST_LOG=debug cargo test
 RUST_LOG=trace cargo test
+
+# Run CLI with logging
+RUST_LOG=debug cargo run --bin pure2p-cli
 ```
+
+See [CLAUDE.md](CLAUDE.md#build--test-commands) for more test options.
 
 ### Run Tests with Backtrace
 
@@ -278,11 +298,18 @@ cargo test <test_name> -- --nocapture --test-threads=1
 
 ## Additional Resources
 
+### Project Documentation
+- **[README.md](README.md)** — Project overview and philosophy
+- **[QUICKSTART.md](QUICKSTART.md)** — CLI usage tutorial
+- **[ROADMAP.md](ROADMAP.md)** — Future features (v0.2+: encryption, GUI, mobile)
+- **[CLAUDE.md](CLAUDE.md)** — Detailed architecture and implementation notes
+
+### External Resources
 - [Rust Book](https://doc.rust-lang.org/book/)
 - [Cargo Documentation](https://doc.rust-lang.org/cargo/)
-- [Pure2P Project Documentation](https://github.com/yourusername/pure2p)
 - [Ed25519 Dalek Docs](https://docs.rs/ed25519-dalek/)
 - [Ring Cryptography Docs](https://docs.rs/ring/)
+- [Hyper HTTP Docs](https://docs.rs/hyper/)
 
 ## Getting Help
 
@@ -294,8 +321,22 @@ cargo test <test_name> -- --nocapture --test-threads=1
 
 Please read our contributing guidelines before submitting pull requests. Ensure:
 
-1. All tests pass
+1. All tests pass (`cargo test`)
 2. Code is formatted (`cargo fmt`)
 3. No clippy warnings (`cargo clippy`)
 4. New features include tests
-5. Commit messages follow conventional commits format
+5. Commit messages follow [conventional commits](CLAUDE.md#commit-style) format
+
+### Before Contributing
+
+- Review [README.md](README.md#-contributing) for our core principles
+- Check [ROADMAP.md](ROADMAP.md) to see planned features
+- Discuss significant changes in GitHub issues first
+
+### Feature Ideas
+
+See [ROADMAP.md](ROADMAP.md) for v0.2-v0.5 planned features:
+- **v0.2**: Encryption, persistent storage, rich messages
+- **v0.3**: Desktop GUI (Tauri)
+- **v0.4**: Mobile apps (iOS/Android)
+- **v0.5**: NAT traversal

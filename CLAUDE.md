@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **For Humans**: See [DEVELOPMENT.md](DEVELOPMENT.md) for setup and workflow, or [README.md](README.md) for project overview.
+
 ## Project Overview
 
 Pure2P is a **radically honest P2P messenger** with no servers, relays, or intermediaries. Key architectural principles:
@@ -13,6 +15,10 @@ Pure2P is a **radically honest P2P messenger** with no servers, relays, or inter
 - **No push notifications**: Mobile apps can't wake on external requests
 
 This is a Rust library (`lib`, `staticlib`, `cdylib`) for cross-platform use (Android, iOS, Desktop).
+
+**See also:**
+- [README.md](README.md) for user-facing documentation and philosophy
+- [ROADMAP.md](ROADMAP.md) for planned features (v0.2: encryption/storage, v0.3: desktop, v0.4: mobile)
 
 ## Build & Test Commands
 
@@ -65,6 +71,7 @@ cargo clippy -- -D warnings    # Fail on warnings
 **`storage`** - Local persistence (STUB)
 - SQLite-based message and peer storage
 - No sync, no cloud backups - intentionally local-only
+- Full implementation planned for [v0.2](ROADMAP.md#-version-02---enhanced-core-q2-2025)
 
 **`queue`** - Message retry logic (IMPLEMENTED)
 - SQLite-backed persistent message queue
@@ -128,7 +135,7 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 
 ### CLI Client (`src/bin/cli.rs`)
 
-A netcat-style REPL for testing P2P messaging:
+A netcat-style REPL for testing P2P messaging. See [QUICKSTART.md](QUICKSTART.md) for full tutorial.
 
 ```bash
 # Start first peer
@@ -188,3 +195,12 @@ Use conventional commits:
 - `feat(module): description` - New features
 - `fix(module): description` - Bug fixes
 - `chore: description` - Maintenance
+
+See [DEVELOPMENT.md](DEVELOPMENT.md#development-workflow) for full contribution workflow.
+
+## Additional Documentation
+
+- **[README.md](README.md)** — Project overview, philosophy, platform support
+- **[QUICKSTART.md](QUICKSTART.md)** — CLI tutorial for new users
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** — Setup, build commands, troubleshooting
+- **[ROADMAP.md](ROADMAP.md)** — Version timeline and planned features
