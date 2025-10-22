@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <title>Pure P2P Messenger — No Servers. No Middlemen.</title>
+  <meta name="description" content="A radically honest messenger: pure P2P, no servers, no relays, no metadata. Absolute privacy at the cost of convenience.">
+  <style>
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #555555;
+  --line: #dddddd;
+  --good: #16a34a;
+  --bad: #dc2626;
+  --warn: #b45309;
+  --accent: #2563eb;
+  --radius: 12px;
+
+  --fs-h1: clamp(2.2rem, 4vw, 3rem);
+  --fs-h2: clamp(1.6rem, 3vw, 2.2rem);
+  --fs-body: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181a1e;
+    --fg: #f0f0f3;
+    --muted: #aaaaaa;
+    --line: #2a2c30;
+    --accent: #60a5fa;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 400 var(--fs-body)/1.5 system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 {
+  margin: 0 0 .6em;
+  line-height: 1.2;
+}
+h1 { font-size: var(--fs-h1); }
+h2 { font-size: var(--fs-h2); }
+p { margin: .5em 0 1em; }
+p.muted { color: var(--muted); }
+
+.wrap {
+  max-width: 64rem;
+  margin-inline: auto;
+  padding: 2rem 1rem;
+}
+
+.brand-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 1rem 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+.brand svg {
+  width: 52px;
+  height: auto;
+}
+.brand span {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.hero-content {
+  text-align: center;
+  padding-block: 2rem 4rem;
+}
+
+.tag {
+  font-size: .85rem;
+  padding: .25rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-block;
+  margin-bottom: 1rem;
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .8rem;
+  justify-content: center;
+}
+.btn {
+  min-height: 44px;
+  padding: .8rem 1.4rem;
+  border-radius: 999px;
+  font-size: 1.05rem;
+  line-height: 1.4;
+  font-weight: 600;
+  cursor: pointer;
+  border: 0;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+}
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn.primary:hover {
+  transform: scale(1.05);
+}
+.btn.primary:active {
+  transform: scale(0.95);
+}
+.btn.primary.liked {
+  animation: likeAnimation 0.4s ease;
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--fg);
+}
+.btn.ghost:hover {
+  background: var(--fg);
+  color: var(--bg);
+  transform: scale(1.05);
+}
+
+@keyframes likeAnimation {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.section {
+  padding-block: 3rem;
+  border-top: 1px solid var(--line);
+}
+.row {
+  display: grid;
+  gap: 1.5rem;
+  align-items: start;
+}
+.row > * {
+  align-self: start;
+}
+@media (min-width: 800px) {
+  .row { grid-template-columns: 1fr 1fr; }
+}
+.card {
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.2rem;
+  background: color-mix(in srgb, var(--bg) 95%, transparent);
+  height: auto;
+  align-self: start;
+}
+
+ul.bullets {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: .6rem;
+}
+ul.bullets li {
+  display: flex;
+  gap: .6rem;
+  align-items: center;
+  line-height: 1.4;
+}
+.dot {
+  width: .85rem;
+  height: .85rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot.good { background: var(--good); }
+.dot.bad { background: var(--bad); }
+.dot.warn { background: var(--warn); }
+
+figure {
+  margin: 0;
+}
+figure svg {
+  display: block;
+}
+figcaption {
+  margin-top: .6rem;
+  font-size: .9rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+footer {
+  padding: 2rem 1rem;
+  font-size: .9rem;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="brand-bar">
+    <div class="brand">
+      <svg viewBox="0 0 120 80" aria-hidden="true">
+        <circle cx="20" cy="40" r="16" fill="var(--accent)" />
+        <circle cx="100" cy="40" r="16" fill="var(--accent)" />
+        <line x1="36" y1="40" x2="84" y2="40" stroke="var(--accent)" stroke-width="8" stroke-linecap="round"/>
+      </svg>
+      <span>Pure2P</span>
+    </div>
+  </div>
+
+  <div class="hero-content">
+    <p class="tag">Concept • Prototype</p>
+    <h1>Pure P2P Messenger</h1>
+    <p style="max-width:44rem;margin:0 auto 2rem;font-size:1.2rem;line-height:1.55;color:var(--muted)">
+      No servers. No relays. No metadata. Just you and your peer. Messages live only on your devices.
+      Absolute privacy at the cost of convenience — by design.
+    </p>
+    <div class="cta">
+      <button class="btn primary" id="likeBtn" aria-label="Like this project">
+        <span id="likeIcon">❤️</span>
+        <span>Like</span>
+        <span id="likeCount" style="margin-left:.3rem;font-weight:700">...</span>
+      </button>
+      <a href="https://github.com/Anton4ikk/pure2p" class="btn ghost" target="_blank" rel="noopener noreferrer">Learn more</a>
+    </div>
+  </div>
+</header>
+  <main>
+    <section class="wrap section">
+      <h2>The problem with “secure” messengers</h2>
+      <p class="muted">If there is any server, relay, or bootstrap node, you must trust it. Trust is a vulnerability.</p>
+      <div class="row">
+      <figure class="card">
+        <svg viewBox="0 0 600 260" role="img" aria-labelledby="problem-diagram">
+          <title id="problem-diagram">Server-mediated model</title>
+
+          <!-- User A -->
+          <rect x="60" y="30" width="140" height="60" rx="10" stroke="currentColor" fill="none"/>
+          <text x="130" y="65" text-anchor="middle" fill="var(--fg)">User A</text>
+
+          <!-- User B -->
+          <rect x="400" y="30" width="140" height="60" rx="10" stroke="currentColor" fill="none"/>
+          <text x="470" y="65" text-anchor="middle" fill="var(--fg)">User B</text>
+
+          <!-- Server -->
+          <rect x="220" y="150" width="160" height="80" rx="12" stroke="currentColor" fill="none"/>
+          <text x="300" y="195" text-anchor="middle" fill="var(--fg)">Server</text>
+
+          <!-- Vertical connections -->
+          <line x1="130" y1="90" x2="300" y2="150" stroke="var(--bad)" stroke-width="2"/>
+          <line x1="470" y1="90" x2="300" y2="150" stroke="var(--bad)" stroke-width="2"/>
+        </svg>
+        <figcaption style="margin-top:.6rem;font-size:.9rem;color:var(--muted)">
+          All messages flow through a server. Metadata leaks, storage, and possible key substitution.
+        </figcaption>
+      </figure>
+        <div class="card">
+          <ul class="bullets">
+            <li><span class="dot bad"></span><div><strong>Metadata:</strong> servers know who talks, when, how often.</div></li>
+            <li><span class="dot bad"></span><div><strong>Compromise:</strong> servers can be hacked or seized.</div></li>
+            <li><span class="dot bad"></span><div><strong>False promises:</strong> “we don’t store” — unverifiable.</div></li>
+            <li><span class="dot bad"></span><div><strong>Control:</strong> servers can censor, block, rate-limit.</div></li>
+          </ul>
+        </div>
+        <div class="card">
+          <ul class="bullets">
+            <li><span class="dot bad"></span><div><strong>Signal:</strong> E2EE is strong, but all delivery and presence still go via Signal servers.</div></li>
+            <li><span class="dot bad"></span><div><strong>Telegram:</strong> most chats are cloud-stored (not E2EE), and even Secret Chats depend on Telegram infrastructure.</div></li>
+            <li><span class="dot bad"></span><div><strong>Matrix / Element:</strong> federated servers; you must trust your homeserver and its operators.</div></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section">
+      <h2>Pure P2P: no middlemen, no trust</h2>
+      <p class="muted">Each app runs its own tiny server. Messages live only on the two devices. That’s it.</p>
+      <div class="row">
+      <figure class="card">
+        <svg viewBox="0 0 600 220" role="img" aria-labelledby="p2p-diagram">
+          <title id="p2p-diagram">Pure P2P model</title>
+
+          <!-- User A -->
+          <rect x="60" y="60" width="160" height="80" rx="12" stroke="currentColor" fill="none"/>
+          <text x="140" y="105" text-anchor="middle" fill="var(--fg)">User A</text>
+
+          <!-- User B -->
+          <rect x="380" y="60" width="160" height="80" rx="12" stroke="currentColor" fill="none"/>
+          <text x="460" y="105" text-anchor="middle" fill="var(--fg)">User B</text>
+
+          <!-- Direct line -->
+          <line x1="220" y1="100" x2="380" y2="100" stroke="var(--good)" stroke-width="2"/>
+        </svg>
+        <figcaption style="margin-top:.6rem;font-size:.9rem;color:var(--muted)">
+          Direct, end-to-end. If your peer is offline, messages wait locally with you — nowhere else.
+        </figcaption>
+      </figure>
+        <div class="card">
+          <ul class="bullets">
+            <li><span class="dot good"></span><div><strong>No servers:</strong> nothing and no one in the middle.</div></li>
+            <li><span class="dot good"></span><div><strong>Local storage only:</strong> your device = your archive.</div></li>
+            <li><span class="dot good"></span><div><strong>No metadata:</strong> no third-party logs, no exhaust.</div></li>
+            <li><span class="dot good"></span><div><strong>Honest trade-off:</strong> privacy prioritized over comfort.</div></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section">
+      <h2>Mobile & desktop constraints</h2>
+      <div class="row">
+        <div class="card">
+          <h3>Delivery timing</h3>
+          <p class="muted">Messages deliver only when both peers are online. Otherwise they remain queued locally.</p>
+        </div>
+        <div class="card">
+          <h3>No push</h3>
+          <p class="muted">OS push = central servers. We don’t use them. You see new messages when you open the app and your peer is online.</p>
+        </div>
+        <div class="card">
+          <h3>Sleep / power</h3>
+          <p class="muted">Sleeping or powered-off devices cannot accept messages. That’s the cost of no middlemen.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section" id="learn">
+      <h2>Ready for honest privacy?</h2>
+      <p class="muted">Join the community and help shape the pure P2P messenger.</p>
+      <div class="cta">
+        <button class="btn primary" id="likeBtn2" aria-label="Like this project">
+          <span id="likeIcon2">❤️</span>
+          <span>Like</span>
+          <span id="likeCount2" style="margin-left:.3rem;font-weight:700">...</span>
+        </button>
+        <a href="https://github.com/Anton4ikk/pure2p" class="btn ghost" target="_blank" rel="noopener noreferrer">Learn more</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    © <span id="year"></span> Pure2P · No servers. No excuses.
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    const API_URL = 'https://likes.pure2p.com';
+
+    const likeBtn = document.getElementById('likeBtn');
+    const likeCount = document.getElementById('likeCount');
+    const likeIcon = document.getElementById('likeIcon');
+    const likeBtn2 = document.getElementById('likeBtn2');
+    const likeCount2 = document.getElementById('likeCount2');
+    const likeIcon2 = document.getElementById('likeIcon2');
+
+    async function loadLikes() {
+      try {
+        const response = await fetch(`${API_URL}/likes`);
+        const data = await response.json();
+        likeCount.textContent = data.count || 0;
+        likeCount2.textContent = data.count || 0;
+      } catch (error) {
+        console.error('Failed to load likes:', error);
+        likeCount.textContent = '?';
+        likeCount2.textContent = '?';
+      }
+    }
+
+    async function addLike(btn, icon, counter) {
+      if (btn.disabled) return;
+
+      try {
+        btn.disabled = true;
+
+        const response = await fetch(`${API_URL}/likes`, {
+          method: 'POST',
+        });
+        const data = await response.json();
+
+        likeCount.textContent = data.count || 0;
+        likeCount2.textContent = data.count || 0;
+
+        btn.classList.add('liked');
+        icon.textContent = '💖';
+
+        setTimeout(() => {
+          btn.classList.remove('liked');
+          icon.textContent = '❤️';
+          btn.disabled = false;
+        }, 600);
+      } catch (error) {
+        console.error('Failed to add like:', error);
+        btn.disabled = false;
+        alert('Failed to add like. Please try again.');
+      }
+    }
+
+    likeBtn.addEventListener('click', () => addLike(likeBtn, likeIcon, likeCount));
+    likeBtn2.addEventListener('click', () => addLike(likeBtn2, likeIcon2, likeCount2));
+
+    loadLikes();
+  </script>
+</body>
+</html>
