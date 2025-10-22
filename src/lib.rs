@@ -49,6 +49,10 @@ pub enum Error {
     /// SQLite database error
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
+
+    /// HTTP/Hyper error
+    #[error("HTTP error: {0}")]
+    Http(#[from] hyper::Error),
 }
 
 /// Initialize the Pure2P library with logging
