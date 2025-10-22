@@ -22,6 +22,10 @@ cargo build                    # Debug build
 cargo build --release          # Optimized release build
 cargo check                    # Fast compile check without building
 
+# Run CLI
+cargo run --bin pure2p-cli     # Run CLI client (default port 8080)
+cargo run --bin pure2p-cli -- --port 9000  # Run on custom port
+
 # Test
 cargo test                     # Run all tests
 cargo test crypto::            # Test specific module
@@ -51,19 +55,22 @@ cargo clippy -- -D warnings    # Fail on warnings
 - JSON serialization for debugging/inspection
 - Version compatibility checking
 
-**`transport`** - Network layer (STUB)
-- Will handle direct HTTP/2 POST connections between peers
-- Peer discovery via manual address exchange
-- Online presence broadcasts
+**`transport`** - Network layer (IMPLEMENTED)
+- HTTP/1.1 server with POST `/output` endpoint for receiving messages
+- Direct peer-to-peer message sending with CBOR serialization
+- Async message handler callback system
+- Peer management (add, remove, get, list)
+- Delivery state tracking (Success, Queued, Retry, Failed)
 
 **`storage`** - Local persistence (STUB)
 - SQLite-based message and peer storage
 - No sync, no cloud backups - intentionally local-only
 
-**`queue`** - Message retry logic (STUB)
-- Priority-based message queuing
-- Exponential backoff for failed deliveries
-- Queues messages when peer is offline
+**`queue`** - Message retry logic (IMPLEMENTED)
+- SQLite-backed persistent message queue
+- Priority-based ordering (Urgent > High > Normal > Low)
+- Exponential backoff for failed deliveries (base_delay * 2^attempts)
+- Configurable max retries and base delay
 
 ### Data Flow
 
@@ -103,13 +110,56 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 - CBOR is typically more compact than JSON - use CBOR for production transport
 - Both serialization formats support full roundtrip without data loss
 
-### Stub Modules
+### Transport (`transport.rs`)
 
-The `transport`, `storage`, and `queue` modules have placeholder implementations marked with `// TODO`. When implementing:
+- Uses `hyper` and `hyper-util` for HTTP/1.1 server and client
+- POST `/output` endpoint accepts CBOR-encoded MessageEnvelope
+- Message handler callback receives incoming messages
+- `send()` returns DeliveryState for retry logic integration
+- Peers stored with UID, address, and public key
 
-1. **Transport**: Use `hyper` for HTTP/2, expose POST endpoint, maintain peer connection state
-2. **Storage**: Use `rusqlite` with bundled SQLite, create schema for messages/peers/queue
-3. **Queue**: Implement priority queue with exponential backoff (base delay * 2^attempts)
+### Queue (`queue.rs`)
+
+- SQLite schema with indexed priority and retry time
+- `enqueue()`, `fetch_pending()`, `mark_delivered()`, `mark_failed()`
+- Default: 5 max retries, 1000ms base delay
+- Exponential backoff: delay = base_delay * 2^attempts
+- Messages auto-removed after max retries exceeded
+
+### CLI Client (`src/bin/cli.rs`)
+
+A netcat-style REPL for testing P2P messaging:
+
+```bash
+# Start first peer
+cargo run --bin pure2p-cli -- --port 8080
+
+# In another terminal, start second peer
+cargo run --bin pure2p-cli -- --port 8081
+```
+
+**Commands:**
+- `/connect <addr> <uid> <pubkey_hex>` - Add a peer
+- `/send <uid> <message>` - Send a message
+- `/peers` - List known peers
+- `/whoami` - Show your UID and address
+- `/help` - Show help
+- `/quit` - Exit
+
+**Example session:**
+```
+> /whoami
+Your identity:
+  UID:     a1b2c3d4e5f6...
+  Address: 127.0.0.1:8080
+  PubKey:  1a2b3c4d5e6f...
+
+> /connect 127.0.0.1:8081 x9y8z7w6v5u4... 9a8b7c6d5e4f...
+✓ Added peer x9y8z7w6v5u4... at 127.0.0.1:8081
+
+> /send x9y8z7w6v5u4... Hello, peer!
+✓ Message delivered to x9y8z7w6v5u4...
+```
 
 ## Testing Conventions
 
@@ -125,9 +175,12 @@ Key crates:
 - `ed25519-dalek`, `x25519-dalek`, `ring`: Cryptography
 - `serde`, `serde_json`, `serde_cbor`: Serialization
 - `tokio`: Async runtime
-- `hyper`: HTTP/2 transport
+- `hyper`, `hyper-util`: HTTP transport
 - `rusqlite`: SQLite storage
 - `thiserror`: Error derivation
+- `rustyline`: CLI REPL
+- `clap`: Command-line argument parsing
+- `colored`: Terminal colors
 
 ## Commit Style
 
