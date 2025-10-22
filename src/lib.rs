@@ -7,6 +7,7 @@
 #![warn(clippy::all)]
 
 pub mod crypto;
+pub mod protocol;
 pub mod transport;
 pub mod storage;
 pub mod queue;
@@ -37,9 +38,21 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Serialization error
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    /// JSON serialization error
+    #[error("JSON serialization error: {0}")]
+    JsonSerialization(#[from] serde_json::Error),
+
+    /// CBOR serialization error
+    #[error("CBOR serialization error: {0}")]
+    CborSerialization(String),
+
+    /// SQLite database error
+    #[error("Database error: {0}")]
+    Database(#[from] rusqlite::Error),
+
+    /// HTTP/Hyper error
+    #[error("HTTP error: {0}")]
+    Http(#[from] hyper::Error),
 }
 
 /// Initialize the Pure2P library with logging
