@@ -45,6 +45,10 @@ pub enum Error {
     /// CBOR serialization error
     #[error("CBOR serialization error: {0}")]
     CborSerialization(String),
+
+    /// SQLite database error
+    #[error("Database error: {0}")]
+    Database(#[from] rusqlite::Error),
 }
 
 /// Initialize the Pure2P library with logging
