@@ -29,8 +29,9 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Cryptography
 ring = "0.17"
-ed25519-dalek = "2.1"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = "2.0"
+rand = "0.8"
 
 # Error handling
 thiserror = "1.0"
