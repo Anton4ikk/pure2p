@@ -77,49 +77,6 @@ cargo test
 cargo test
 ```
 
-### Run Tests for Specific Module
-
-```bash
-# Crypto module tests
-cargo test crypto::
-
-# Storage module tests
-cargo test storage::
-
-# Transport module tests
-cargo test transport::
-
-# Queue module tests
-cargo test queue::
-```
-
-### Run a Specific Test
-
-```bash
-# Run a single test by name
-cargo test test_keypair_generation
-
-# Run tests matching a pattern
-cargo test uid
-```
-
-### Run Tests with Output
-
-```bash
-# Show println! output for passing tests
-cargo test -- --nocapture
-
-# Show output only for failed tests (default)
-cargo test
-```
-
-### Run Tests in Verbose Mode
-
-```bash
-# Show detailed information about test execution
-cargo test -- --test-threads=1 --nocapture
-```
-
 ## Code Quality
 
 ### Format Code
