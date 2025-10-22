@@ -1,0 +1,55 @@
+[package]
+name = "pure2p"
+version = "0.1.0"
+edition = "2021"
+authors = ["Pure2P Team"]
+description = "A pure peer-to-peer messaging system with cross-platform support"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/pure2p"
+
+[lib]
+name = "pure2p"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# HTTP/2 and networking
+hyper = { version = "1.1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Cryptography
+ring = "0.17"
+ed25519-dalek = "2.1"
+x25519-dalek = "2.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+bytes = "1.5"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
