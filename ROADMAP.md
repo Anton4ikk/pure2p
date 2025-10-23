@@ -8,11 +8,11 @@ Development timeline and planned features.
 
 ## ✅ Version 0.1 - CLI Prototype (COMPLETED)
 
-**Status:** Released
+**Status:** Released (v0.2 foundation work in progress on `dev` branch)
 
 Foundational P2P messaging with command-line interface.
 
-### Implemented Features
+### Implemented Features (v0.1)
 
 - [x] Ed25519 keypair generation and UID derivation
 - [x] CBOR/JSON message serialization
@@ -21,11 +21,26 @@ Foundational P2P messaging with command-line interface.
 - [x] Netcat-style CLI REPL
 - [x] Cross-platform support (macOS, Linux, Windows)
 
+### Foundation Work for v0.2 (on `dev` branch)
+
+- [x] Message queue startup retry (resends pending messages on app launch)
+- [x] Contact management structures with expiry tracking
+- [x] Contact token generation/parsing (base64-encoded CBOR)
+- [x] Chat conversation structures
+- [x] Chat pending message tracking (`has_pending_messages` flag)
+- [x] Application state persistence (JSON/CBOR)
+- [x] Global settings management
+- [x] AppState chat management methods (get_chat, get_or_create_chat, sync_pending_status)
+- [x] Queue method to get pending contact UIDs
+- [x] Transport `/ping` endpoint for connectivity checks
+- [x] Transport `/message` endpoint with flexible message types
+- [x] Transport client methods: `send_ping()`, `send_message()`
+
 ### Current Limitations
 
 - Manual UID/address exchange required
 - No NAT traversal (LAN or port-forwarded only) — see [v0.5](#-version-05---nat-traversal-q1-2026)
-- No persistent storage (messages lost on restart) — see [v0.2](#-version-02---enhanced-core-q2-2025)
+- No persistent storage (foundation structures ready, SQLite integration pending) — see [v0.2](#-version-02---enhanced-core-q2-2025)
 - No encryption (plaintext payloads) — see [v0.2](#-version-02---enhanced-core-q2-2025)
 - Text-only messaging — see [v0.2](#-version-02---enhanced-core-q2-2025)
 
@@ -35,15 +50,28 @@ Foundational P2P messaging with command-line interface.
 
 ## 🔨 Version 0.2 - Enhanced Core (Q2 2025)
 
+**Status:** In Development
+
 Focus: Storage, encryption, and rich messages.
 
-### Planned Features
+### In Progress Features
 
 - [ ] **Persistent Storage**
-  - SQLite message history
-  - Conversation management
-  - Search and filtering
-  - Export/import
+  - [x] Foundation: AppState, Contact, Chat, Settings structures (on `dev`)
+  - [x] Contact token generation/parsing (on `dev`)
+  - [x] Message queue with startup retry (on `dev`)
+  - [x] Chat pending message tracking (on `dev`)
+  - [ ] SQLite integration for contacts and chats
+  - [ ] Message history persistence
+  - [ ] Search and filtering
+  - [ ] Export/import functionality
+
+- [ ] **Enhanced Transport**
+  - [x] `/ping` endpoint for connectivity checks (on `dev`)
+  - [x] `/message` endpoint with flexible message types (on `dev`)
+  - [x] Client methods for ping and message sending (on `dev`)
+  - [ ] Message type handlers (text, delete, typing indicators)
+  - [ ] Integration with AppState for automatic message storage
 
 - [ ] **End-to-End Encryption**
   - X25519 key exchange + ChaCha20-Poly1305

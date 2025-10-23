@@ -61,23 +61,37 @@ cargo clippy -- -D warnings    # Fail on warnings
 - JSON serialization for debugging/inspection
 - Version compatibility checking
 
-**`transport`** - Network layer (IMPLEMENTED)
-- HTTP/1.1 server with POST `/output` endpoint for receiving messages
+**`transport`** - Network layer (ENHANCED - `dev` branch)
+- HTTP/1.1 server with multiple endpoints:
+  - POST `/output` - Legacy message endpoint (MessageEnvelope)
+  - POST `/ping` - Connectivity checks (returns UID + status)
+  - POST `/message` - New message endpoint (MessageRequest with from_uid, message_type, payload)
 - Direct peer-to-peer message sending with CBOR serialization
-- Async message handler callback system
+- Async message handler callback system (dual handlers for /output and /message)
 - Peer management (add, remove, get, list)
 - Delivery state tracking (Success, Queued, Retry, Failed)
+- **New**: Ping functionality for contact validation and connectivity testing
+- **New**: Flexible message types (text, delete, typing, etc.)
 
-**`storage`** - Local persistence (STUB)
-- SQLite-based message and peer storage
+**`storage`** - Local persistence (FOUNDATION STRUCTURES - `dev` branch)
+- Contact management structures with expiry and active status tracking
+- Contact token generation/parsing (base64-encoded CBOR)
+- Chat conversation structures with message history
+- **New**: `has_pending_messages` flag for UI highlighting
+- Application state persistence (JSON/CBOR serialization)
+- Global settings management
+- **New**: AppState methods for chat management (get_chat, get_or_create_chat, sync_pending_status)
 - No sync, no cloud backups - intentionally local-only
-- Full implementation planned for [v0.2](ROADMAP.md#-version-02---enhanced-core-q2-2025)
+- **Status**: Data structures complete, SQLite integration in progress for [v0.2](ROADMAP.md#-version-02---enhanced-core-q2-2025)
 
-**`queue`** - Message retry logic (IMPLEMENTED)
+**`queue`** - Message retry logic (ENHANCED - `dev` branch)
 - SQLite-backed persistent message queue
 - Priority-based ordering (Urgent > High > Normal > Low)
 - Exponential backoff for failed deliveries (base_delay * 2^attempts)
 - Configurable max retries and base delay
+- **New**: Startup retry - automatically resends all pending messages when app launches
+- **New**: Enhanced schema with message_type, target_uid, and retry_count tracking
+- **New**: `get_pending_contact_uids()` for syncing pending message flags with chats
 
 ### Data Flow
 
@@ -91,13 +105,63 @@ Sender Client                    Recipient Client
    [Storage] ← (retry if failed)     [UI]
 ```
 
+### Storage Structures
+
+**`Contact`** - Peer information with expiry
+- `uid`: Unique identifier (derived from public key)
+- `ip`: IP address and port (e.g., "192.168.1.100:8080")
+- `pubkey`: Ed25519 public key bytes
+- `expiry`: Expiration timestamp
+- `is_active`: Contact active status
+- Methods: `is_expired()`, `activate()`, `deactivate()`
+
+**`Chat`** - Conversation with a contact
+- `contact_uid`: UID of the peer
+- `messages`: Vector of Message objects
+- `is_active`: Unread status indicator
+- Methods: `append_message()`, `mark_unread()`, `mark_read()`
+
+**`AppState`** - Global application state
+- `contacts`: List of Contact objects
+- `chats`: List of Chat objects
+- `message_queue`: Message IDs awaiting delivery
+- `settings`: Application settings
+- Supports JSON and CBOR serialization
+- Methods: `save()`, `load()`, `save_cbor()`, `load_cbor()`
+
+**`Settings`** - Configurable parameters
+- `default_contact_expiry_days`: Contact token validity (default 30)
+- `max_message_retries`: Retry limit (default 5)
+- `retry_base_delay_ms`: Initial retry delay (default 1000)
+- `global_retry_interval_ms`: Periodic retry interval (default 600,000 = 10 min)
+- `enable_notifications`: Notification toggle
+
+**Contact Tokens**
+- `generate_contact_token(ip, pubkey, expiry)`: Creates base64-encoded CBOR token
+- `parse_contact_token(token)`: Decodes token and validates expiry
+- Used for manual peer exchange and identity sharing
+
+**Transport Structures**
+
+**`PingResponse`** - Connectivity check response
+- `uid`: UID of the responding peer
+- `status`: Status message (typically "ok")
+- Used to validate contact availability and identity
+
+**`MessageRequest`** - New message format for /message endpoint
+- `from_uid`: Sender's UID
+- `message_type`: Message type (e.g., "text", "delete", "typing")
+- `payload`: Arbitrary binary payload
+- Replaces MessageEnvelope for new message flows
+- Enables flexible message types for rich functionality
+
 ### Error Handling
 
 All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 - `Crypto(String)`: Cryptographic failures
 - `JsonSerialization` / `CborSerialization`: Encoding issues
 - `Transport(String)`: Network errors
-- `Storage(String)`: Database failures
+- `Storage(String)`: Database failures, invalid tokens, expired contacts
 - `Queue(String)`: Message queue issues
 - `Io`: Standard I/O errors
 
@@ -120,18 +184,48 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 ### Transport (`transport.rs`)
 
 - Uses `hyper` and `hyper-util` for HTTP/1.1 server and client
-- POST `/output` endpoint accepts CBOR-encoded MessageEnvelope
-- Message handler callback receives incoming messages
-- `send()` returns DeliveryState for retry logic integration
+- **Endpoints**:
+  - POST `/output` - Legacy endpoint, accepts CBOR-encoded MessageEnvelope
+  - POST `/ping` - Returns CBOR-encoded PingResponse with UID and status
+  - POST `/message` - New endpoint, accepts CBOR-encoded MessageRequest
+- **Client methods**:
+  - `send()` - Sends to /output endpoint (legacy)
+  - `send_ping(contact)` - Pings a contact, returns PingResponse
+  - `send_message(contact, from_uid, message_type, payload)` - Sends to /message endpoint
+- **Handlers**:
+  - `MessageHandler` - Legacy callback for /output messages
+  - `NewMessageHandler` - Callback for /message endpoint (designed for AppState integration)
+- `set_local_uid()` - Configures local UID for ping responses
 - Peers stored with UID, address, and public key
 
 ### Queue (`queue.rs`)
 
 - SQLite schema with indexed priority and retry time
-- `enqueue()`, `fetch_pending()`, `mark_delivered()`, `mark_failed()`
+- Enhanced schema: `message_id`, `target_uid`, `message_type`, `payload`, `retry_count`, `last_attempt`
+- `enqueue()`, `enqueue_with_type()`, `fetch_pending()`, `fetch_all_pending()`, `dequeue()`
+- `mark_delivered()`, `mark_failed()`, `retry_pending_on_startup()`
 - Default: 5 max retries, 1000ms base delay
 - Exponential backoff: delay = base_delay * 2^attempts
 - Messages auto-removed after max retries exceeded
+- **Startup retry**: On app launch, `retry_pending_on_startup()` attempts delivery of all queued messages
+
+### Storage (`storage.rs`)
+
+- Contact token system for easy peer exchange
+- Base64-encoded CBOR tokens containing: IP, public key, expiry
+- `Contact` struct tracks peer status and expiry
+- `Chat` struct manages conversation history per contact
+  - `has_pending_messages` flag for UI notification badges
+  - `mark_has_pending()` / `mark_no_pending()` methods
+  - `is_active` for unread status
+- `AppState` provides unified state management with JSON/CBOR persistence
+  - `sync_pending_status(pending_uids)` - Updates chat pending flags from queue
+  - `get_chat(uid)` / `get_chat_mut(uid)` - Retrieve chat by contact UID
+  - `get_or_create_chat(uid)` - Get existing or create new chat
+  - `add_chat(uid)` - Add new chat
+- `Settings` allows runtime configuration updates
+- Active/inactive status tracking for contacts and chats
+- Expiry validation prevents use of outdated contact information
 
 ### CLI Client (`src/bin/cli.rs`)
 
@@ -181,6 +275,8 @@ Your identity:
 Key crates:
 - `ed25519-dalek`, `x25519-dalek`, `ring`: Cryptography
 - `serde`, `serde_json`, `serde_cbor`: Serialization
+- `base64`: Contact token encoding
+- `chrono`: Timestamp and expiry management
 - `tokio`: Async runtime
 - `hyper`, `hyper-util`: HTTP transport
 - `rusqlite`: SQLite storage

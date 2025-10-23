@@ -193,8 +193,8 @@ pure2p/
 │   ├── crypto.rs       # Cryptographic operations (Ed25519, UIDs)
 │   ├── protocol.rs     # MessageEnvelope, CBOR/JSON serialization
 │   ├── transport.rs    # HTTP/1.1 server/client, POST /output endpoint
-│   ├── storage.rs      # Local data storage (stub for v0.2)
-│   ├── queue.rs        # SQLite message queue with exponential backoff
+│   ├── storage.rs      # Contact management, chat structures, AppState persistence
+│   ├── queue.rs        # SQLite message queue with exponential backoff and startup retry
 │   └── bin/
 │       └── cli.rs      # Command-line client (netcat-style)
 ├── Cargo.toml          # Project dependencies and metadata
