@@ -5,6 +5,52 @@
 //! - Retry logic for failed deliveries
 //! - Priority handling
 //! - Queue persistence
+//! - Startup retry for pending messages
+//!
+//! ## Retry on Startup
+//!
+//! When the application starts, all pending messages in the queue should be
+//! retried immediately using `retry_pending_on_startup()`. This ensures that
+//! messages queued from previous sessions are delivered as soon as possible.
+//!
+//! ### Flow:
+//! 1. App launches and initializes MessageQueue
+//! 2. Call `retry_pending_on_startup()` with async delivery function
+//! 3. All queued messages are fetched (ignoring retry time)
+//! 4. Messages are processed in priority order
+//! 5. For each message:
+//!    - Async POST request to recipient's `/output` endpoint
+//!    - On success: Remove from queue via `mark_success()`
+//!    - On failure: Update retry count via `mark_failed()`
+//! 6. Failed messages remain in queue for future retry attempts
+//!
+//! ### Example:
+//! ```rust,no_run
+//! use pure2p::queue::MessageQueue;
+//! use pure2p::storage::Message;
+//!
+//! # async fn example() -> pure2p::Result<()> {
+//! let mut queue = MessageQueue::new()?;
+//!
+//! // Define delivery function that performs HTTP POST
+//! let deliver = |msg: Message, recipient: String| async move {
+//!     // In a real implementation:
+//!     // 1. Build MessageEnvelope from msg
+//!     // 2. Serialize to CBOR
+//!     // 3. POST to http://{recipient}/output
+//!     // 4. Return Ok(()) on success, Err on failure
+//!
+//!     // Simplified example:
+//!     println!("Delivering message {} to {}", msg.id, recipient);
+//!     Ok(())
+//! };
+//!
+//! // Retry all pending messages on startup
+//! let (succeeded, failed) = queue.retry_pending_on_startup(deliver).await?;
+//! println!("Delivered {} messages, {} failed", succeeded, failed);
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::{storage::Message, Error, Result};
 use chrono::Utc;
@@ -212,6 +258,45 @@ impl MessageQueue {
         Ok(messages)
     }
 
+    /// Get all pending messages for startup retry (ignores retry time)
+    ///
+    /// This is used on app startup to immediately retry all queued messages
+    /// regardless of their scheduled retry time.
+    pub fn fetch_all_pending(&self) -> Result<Vec<QueuedMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT message_id, sender, recipient, content, timestamp, priority, retry_count, next_retry
+             FROM message_queue
+             ORDER BY priority DESC, next_retry ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let priority_val: i64 = row.get(5)?;
+            let priority = Priority::from_i64(priority_val)
+                .unwrap_or(Priority::Normal);
+
+            Ok(QueuedMessage {
+                message: Message {
+                    id: row.get(0)?,
+                    sender: row.get(1)?,
+                    recipient: row.get(2)?,
+                    content: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    delivered: false,
+                },
+                priority,
+                attempts: row.get(6)?,
+                next_retry: row.get(7)?,
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+
+        Ok(messages)
+    }
+
     /// Dequeue: fetch the next pending message and remove it from the queue
     pub fn dequeue(&mut self) -> Result<Option<QueuedMessage>> {
         let pending = self.fetch_pending()?;
@@ -383,6 +468,74 @@ impl MessageQueue {
     /// Set base delay for exponential backoff (in milliseconds)
     pub fn set_base_delay_ms(&mut self, base_delay_ms: i64) {
         self.base_delay_ms = base_delay_ms;
+    }
+
+    /// Retry all pending messages on startup
+    ///
+    /// This method fetches all queued messages and attempts to deliver them
+    /// by calling the provided async delivery function. Messages are processed
+    /// in order of priority.
+    ///
+    /// # Arguments
+    /// * `deliver_fn` - Async function that attempts to deliver a message.
+    ///                  Should return Ok(()) on success, Err on failure.
+    ///
+    /// # Returns
+    /// A tuple of (succeeded_count, failed_count)
+    pub async fn retry_pending_on_startup<F, Fut>(
+        &mut self,
+        deliver_fn: F,
+    ) -> Result<(usize, usize)>
+    where
+        F: Fn(Message, String) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
+        let pending_messages = self.fetch_all_pending()?;
+        let total = pending_messages.len();
+
+        if total == 0 {
+            return Ok((0, 0));
+        }
+
+        tracing::info!("Retrying {} pending messages on startup", total);
+
+        let mut succeeded = 0;
+        let mut failed = 0;
+
+        for queued_msg in pending_messages {
+            let message_id = queued_msg.message.id.clone();
+            let recipient = queued_msg.message.recipient.clone();
+
+            // Attempt delivery
+            match deliver_fn(queued_msg.message.clone(), recipient).await {
+                Ok(()) => {
+                    // Success: mark as delivered and remove from queue
+                    if let Err(e) = self.mark_success(&message_id) {
+                        tracing::error!("Failed to mark message {} as delivered: {}", message_id, e);
+                    } else {
+                        succeeded += 1;
+                        tracing::debug!("Message {} delivered successfully on startup", message_id);
+                    }
+                }
+                Err(e) => {
+                    // Failure: mark as failed (will schedule retry)
+                    tracing::warn!("Failed to deliver message {} on startup: {}", message_id, e);
+                    if let Err(e) = self.mark_failed(&message_id) {
+                        tracing::error!("Failed to update retry status for {}: {}", message_id, e);
+                    }
+                    failed += 1;
+                }
+            }
+        }
+
+        tracing::info!(
+            "Startup retry complete: {} succeeded, {} failed out of {} total",
+            succeeded,
+            failed,
+            total
+        );
+
+        Ok((succeeded, failed))
     }
 }
 
@@ -942,5 +1095,175 @@ mod tests {
 
         // Both messages should be in queue
         assert_eq!(queue.size().expect("Failed to get size"), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_all_pending() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Add messages with future retry times
+        let msg1 = create_test_message("msg1", "alice", "bob");
+        let msg2 = create_test_message("msg2", "bob", "charlie");
+
+        queue
+            .enqueue(msg1, Priority::High)
+            .expect("Failed to enqueue msg1");
+        queue
+            .enqueue(msg2, Priority::Normal)
+            .expect("Failed to enqueue msg2");
+
+        // Schedule both with future retry times (1 hour from now)
+        queue
+            .schedule_retry("msg1", 3_600_000)
+            .expect("Failed to schedule");
+        queue
+            .schedule_retry("msg2", 3_600_000)
+            .expect("Failed to schedule");
+
+        // fetch_pending should return 0 (not ready yet)
+        let pending = queue.fetch_pending().expect("Failed to fetch pending");
+        assert_eq!(pending.len(), 0);
+
+        // fetch_all_pending should return both (ignores retry time)
+        let all_pending = queue.fetch_all_pending().expect("Failed to fetch all");
+        assert_eq!(all_pending.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_retry_pending_on_startup_success() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Add test messages
+        let msg1 = create_test_message("startup_msg1", "alice", "bob");
+        let msg2 = create_test_message("startup_msg2", "bob", "charlie");
+
+        queue
+            .enqueue(msg1, Priority::High)
+            .expect("Failed to enqueue msg1");
+        queue
+            .enqueue(msg2, Priority::Normal)
+            .expect("Failed to enqueue msg2");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 2);
+
+        // Mock delivery function that always succeeds
+        let deliver_fn = |_msg: Message, _recipient: String| async move { Ok(()) };
+
+        // Run startup retry
+        let (succeeded, failed) = queue
+            .retry_pending_on_startup(deliver_fn)
+            .await
+            .expect("Failed to retry on startup");
+
+        // Both should succeed
+        assert_eq!(succeeded, 2);
+        assert_eq!(failed, 0);
+
+        // Queue should be empty (all delivered)
+        assert_eq!(queue.size().expect("Failed to get size"), 0);
+    }
+
+    #[tokio::test]
+    async fn test_retry_pending_on_startup_failure() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        queue.set_max_retries(3); // Set low for testing
+
+        let msg = create_test_message("startup_fail", "alice", "bob");
+        queue
+            .enqueue(msg, Priority::Normal)
+            .expect("Failed to enqueue");
+
+        // Mock delivery function that always fails
+        let deliver_fn = |_msg: Message, _recipient: String| async move {
+            Err(Error::Transport("Connection refused".to_string()))
+        };
+
+        // Run startup retry
+        let (succeeded, failed) = queue
+            .retry_pending_on_startup(deliver_fn)
+            .await
+            .expect("Failed to retry on startup");
+
+        // Should fail
+        assert_eq!(succeeded, 0);
+        assert_eq!(failed, 1);
+
+        // Message should still be in queue (for future retry)
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_pending_on_startup_mixed() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Add multiple messages
+        let msg1 = create_test_message("mixed_1", "alice", "bob");
+        let msg2 = create_test_message("mixed_2", "bob", "charlie");
+        let msg3 = create_test_message("mixed_3", "charlie", "dave");
+
+        queue
+            .enqueue(msg1, Priority::High)
+            .expect("Failed to enqueue msg1");
+        queue
+            .enqueue(msg2, Priority::Normal)
+            .expect("Failed to enqueue msg2");
+        queue
+            .enqueue(msg3, Priority::Low)
+            .expect("Failed to enqueue msg3");
+
+        // Track which messages were attempted
+        let attempted = Arc::new(Mutex::new(Vec::new()));
+        let attempted_clone = attempted.clone();
+
+        // Mock delivery: succeed for msg1 and msg3, fail for msg2
+        let deliver_fn = move |msg: Message, _recipient: String| {
+            let attempted = attempted_clone.clone();
+            async move {
+                attempted.lock().await.push(msg.id.clone());
+                if msg.id == "mixed_2" {
+                    Err(Error::Transport("Failed".to_string()))
+                } else {
+                    Ok(())
+                }
+            }
+        };
+
+        // Run startup retry
+        let (succeeded, failed) = queue
+            .retry_pending_on_startup(deliver_fn)
+            .await
+            .expect("Failed to retry on startup");
+
+        assert_eq!(succeeded, 2); // msg1 and msg3
+        assert_eq!(failed, 1); // msg2
+
+        // Only msg2 should remain in queue
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        let remaining = queue.list().expect("Failed to list");
+        assert_eq!(remaining[0].message.id, "mixed_2");
+
+        // Verify all messages were attempted
+        let attempted_msgs = attempted.lock().await;
+        assert_eq!(attempted_msgs.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_retry_pending_on_startup_empty_queue() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        let deliver_fn = |_msg: Message, _recipient: String| async move { Ok(()) };
+
+        // Run startup retry on empty queue
+        let (succeeded, failed) = queue
+            .retry_pending_on_startup(deliver_fn)
+            .await
+            .expect("Failed to retry on startup");
+
+        assert_eq!(succeeded, 0);
+        assert_eq!(failed, 0);
     }
 }
