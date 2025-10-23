@@ -460,6 +460,45 @@ impl MessageQueue {
         Ok(messages)
     }
 
+    /// Get unique contact UIDs (target_uid) that have pending messages in the queue
+    ///
+    /// This is useful for syncing the `has_pending_messages` flag in chats.
+    ///
+    /// # Returns
+    /// A HashSet of contact UIDs with pending messages
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pure2p::queue::MessageQueue;
+    ///
+    /// # fn example() -> pure2p::Result<()> {
+    /// let queue = MessageQueue::new()?;
+    /// let pending_uids = queue.get_pending_contact_uids()?;
+    ///
+    /// for uid in pending_uids {
+    ///     println!("Contact {} has pending messages", uid);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_pending_contact_uids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT target_uid FROM message_queue",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let uid: String = row.get(0)?;
+            Ok(uid)
+        })?;
+
+        let mut uids = std::collections::HashSet::new();
+        for row in rows {
+            uids.insert(row?);
+        }
+
+        Ok(uids)
+    }
+
     /// Set maximum retry attempts
     pub fn set_max_retries(&mut self, max_retries: u32) {
         self.max_retries = max_retries;
@@ -1265,5 +1304,126 @@ mod tests {
 
         assert_eq!(succeeded, 0);
         assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_get_pending_contact_uids_empty() {
+        let queue = MessageQueue::new().expect("Failed to create queue");
+        let uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+
+        assert!(uids.is_empty());
+    }
+
+    #[test]
+    fn test_get_pending_contact_uids_single() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg1", "alice", "bob");
+
+        queue.enqueue(msg, Priority::Normal).expect("Failed to enqueue");
+
+        let uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+
+        assert_eq!(uids.len(), 1);
+        assert!(uids.contains("bob")); // recipient is the target_uid
+    }
+
+    #[test]
+    fn test_get_pending_contact_uids_multiple_same_contact() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Multiple messages to the same contact
+        let msg1 = create_test_message("msg1", "alice", "bob");
+        let msg2 = create_test_message("msg2", "alice", "bob");
+        let msg3 = create_test_message("msg3", "charlie", "bob");
+
+        queue.enqueue(msg1, Priority::Normal).expect("Failed to enqueue msg1");
+        queue.enqueue(msg2, Priority::High).expect("Failed to enqueue msg2");
+        queue.enqueue(msg3, Priority::Low).expect("Failed to enqueue msg3");
+
+        let uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+
+        // Should only have one unique UID (bob)
+        assert_eq!(uids.len(), 1);
+        assert!(uids.contains("bob"));
+    }
+
+    #[test]
+    fn test_get_pending_contact_uids_multiple_contacts() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Messages to different contacts
+        let msg1 = create_test_message("msg1", "alice", "bob");
+        let msg2 = create_test_message("msg2", "alice", "charlie");
+        let msg3 = create_test_message("msg3", "bob", "david");
+
+        queue.enqueue(msg1, Priority::Normal).expect("Failed to enqueue msg1");
+        queue.enqueue(msg2, Priority::Normal).expect("Failed to enqueue msg2");
+        queue.enqueue(msg3, Priority::Normal).expect("Failed to enqueue msg3");
+
+        let uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+
+        // Should have three unique UIDs
+        assert_eq!(uids.len(), 3);
+        assert!(uids.contains("bob"));
+        assert!(uids.contains("charlie"));
+        assert!(uids.contains("david"));
+    }
+
+    #[test]
+    fn test_get_pending_contact_uids_after_delivery() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        let msg1 = create_test_message("msg1", "alice", "bob");
+        let msg2 = create_test_message("msg2", "alice", "charlie");
+
+        queue.enqueue(msg1, Priority::Normal).expect("Failed to enqueue msg1");
+        queue.enqueue(msg2, Priority::Normal).expect("Failed to enqueue msg2");
+
+        // Verify both contacts have pending messages
+        let uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+        assert_eq!(uids.len(), 2);
+
+        // Mark one as delivered
+        queue.mark_delivered("msg1").expect("Failed to mark delivered");
+
+        // Should only have charlie now
+        let uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+        assert_eq!(uids.len(), 1);
+        assert!(uids.contains("charlie"));
+        assert!(!uids.contains("bob"));
+    }
+
+    #[test]
+    fn test_integration_appstate_queue_sync() {
+        use crate::storage::AppState;
+        use std::collections::HashSet;
+
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let mut app_state = AppState::new();
+
+        // Create chats
+        app_state.add_chat("alice".to_string());
+        app_state.add_chat("bob".to_string());
+        app_state.add_chat("charlie".to_string());
+
+        // Enqueue messages to some contacts
+        let msg1 = create_test_message("msg1", "me", "alice");
+        let msg2 = create_test_message("msg2", "me", "alice");
+        let msg3 = create_test_message("msg3", "me", "charlie");
+
+        queue.enqueue(msg1, Priority::Normal).expect("Failed to enqueue");
+        queue.enqueue(msg2, Priority::Normal).expect("Failed to enqueue");
+        queue.enqueue(msg3, Priority::Normal).expect("Failed to enqueue");
+
+        // Get pending UIDs from queue
+        let pending_uids = queue.get_pending_contact_uids().expect("Failed to get pending UIDs");
+
+        // Sync app state
+        app_state.sync_pending_status(&pending_uids);
+
+        // Verify flags
+        assert!(app_state.get_chat("alice").unwrap().has_pending_messages);
+        assert!(!app_state.get_chat("bob").unwrap().has_pending_messages);
+        assert!(app_state.get_chat("charlie").unwrap().has_pending_messages);
     }
 }

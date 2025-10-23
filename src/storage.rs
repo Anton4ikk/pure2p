@@ -152,6 +152,8 @@ pub struct Chat {
     pub messages: Vec<Message>,
     /// Whether this chat is active (unread messages present)
     pub is_active: bool,
+    /// Whether there are pending (queued) messages for this contact
+    pub has_pending_messages: bool,
 }
 
 impl Chat {
@@ -161,6 +163,7 @@ impl Chat {
             contact_uid,
             messages: Vec::new(),
             is_active: false,
+            has_pending_messages: false,
         }
     }
 
@@ -177,6 +180,21 @@ impl Chat {
     /// Mark chat as read (inactive)
     pub fn mark_read(&mut self) {
         self.is_active = false;
+    }
+
+    /// Mark chat as having pending messages in the queue
+    pub fn mark_has_pending(&mut self) {
+        self.has_pending_messages = true;
+    }
+
+    /// Mark chat as having no pending messages
+    pub fn mark_no_pending(&mut self) {
+        self.has_pending_messages = false;
+    }
+
+    /// Check if this chat has pending messages
+    pub fn has_pending(&self) -> bool {
+        self.has_pending_messages
     }
 }
 
@@ -317,6 +335,84 @@ impl AppState {
         let state: AppState = serde_cbor::from_slice(&cbor)
             .map_err(|e| Error::CborSerialization(format!("Failed to deserialize state: {}", e)))?;
         Ok(state)
+    }
+
+    /// Update chat pending message status based on queued message UIDs
+    ///
+    /// This method synchronizes the `has_pending_messages` flag for each chat
+    /// based on the list of UIDs that have pending messages in the queue.
+    ///
+    /// # Arguments
+    /// * `pending_uids` - Set of contact UIDs that have messages in the queue
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pure2p::storage::AppState;
+    /// use std::collections::HashSet;
+    ///
+    /// let mut state = AppState::new();
+    /// let mut pending_uids = HashSet::new();
+    /// pending_uids.insert("contact_uid_123".to_string());
+    ///
+    /// state.sync_pending_status(&pending_uids);
+    /// ```
+    pub fn sync_pending_status(&mut self, pending_uids: &std::collections::HashSet<String>) {
+        for chat in &mut self.chats {
+            if pending_uids.contains(&chat.contact_uid) {
+                chat.mark_has_pending();
+            } else {
+                chat.mark_no_pending();
+            }
+        }
+    }
+
+    /// Get a mutable reference to a chat by contact UID
+    ///
+    /// # Arguments
+    /// * `contact_uid` - The UID of the contact
+    ///
+    /// # Returns
+    /// A mutable reference to the chat if found, None otherwise
+    pub fn get_chat_mut(&mut self, contact_uid: &str) -> Option<&mut Chat> {
+        self.chats.iter_mut().find(|c| c.contact_uid == contact_uid)
+    }
+
+    /// Get a reference to a chat by contact UID
+    ///
+    /// # Arguments
+    /// * `contact_uid` - The UID of the contact
+    ///
+    /// # Returns
+    /// A reference to the chat if found, None otherwise
+    pub fn get_chat(&self, contact_uid: &str) -> Option<&Chat> {
+        self.chats.iter().find(|c| c.contact_uid == contact_uid)
+    }
+
+    /// Add a new chat for a contact
+    ///
+    /// # Arguments
+    /// * `contact_uid` - The UID of the contact
+    ///
+    /// # Returns
+    /// A mutable reference to the newly created chat
+    pub fn add_chat(&mut self, contact_uid: String) -> &mut Chat {
+        let chat = Chat::new(contact_uid);
+        self.chats.push(chat);
+        self.chats.last_mut().unwrap()
+    }
+
+    /// Get or create a chat for a contact
+    ///
+    /// # Arguments
+    /// * `contact_uid` - The UID of the contact
+    ///
+    /// # Returns
+    /// A mutable reference to the chat (existing or newly created)
+    pub fn get_or_create_chat(&mut self, contact_uid: &str) -> &mut Chat {
+        if self.get_chat(contact_uid).is_none() {
+            self.add_chat(contact_uid.to_string());
+        }
+        self.get_chat_mut(contact_uid).unwrap()
     }
 }
 
@@ -1062,5 +1158,171 @@ mod tests {
         assert!(loaded.is_active);
         assert_eq!(loaded.messages[0].id, "msg_0");
         assert_eq!(loaded.messages[2].timestamp, 2000);
+    }
+
+    #[test]
+    fn test_chat_pending_messages_flag() {
+        let mut chat = Chat::new("contact_uid".to_string());
+
+        // Initially, no pending messages
+        assert!(!chat.has_pending());
+        assert!(!chat.has_pending_messages);
+
+        // Mark as having pending messages
+        chat.mark_has_pending();
+        assert!(chat.has_pending());
+        assert!(chat.has_pending_messages);
+
+        // Mark as no pending messages
+        chat.mark_no_pending();
+        assert!(!chat.has_pending());
+        assert!(!chat.has_pending_messages);
+    }
+
+    #[test]
+    fn test_chat_pending_independent_of_active() {
+        let mut chat = Chat::new("contact_uid".to_string());
+
+        // Set both flags independently
+        chat.mark_unread();
+        chat.mark_has_pending();
+
+        assert!(chat.is_active);
+        assert!(chat.has_pending_messages);
+
+        // Clear one flag
+        chat.mark_read();
+
+        assert!(!chat.is_active);
+        assert!(chat.has_pending_messages); // Should remain true
+
+        // Clear the other flag
+        chat.mark_no_pending();
+
+        assert!(!chat.is_active);
+        assert!(!chat.has_pending_messages);
+    }
+
+    #[test]
+    fn test_appstate_sync_pending_status() {
+        use std::collections::HashSet;
+
+        let mut state = AppState::new();
+
+        // Add some chats
+        state.add_chat("alice".to_string());
+        state.add_chat("bob".to_string());
+        state.add_chat("charlie".to_string());
+
+        // Create pending UIDs set
+        let mut pending_uids = HashSet::new();
+        pending_uids.insert("alice".to_string());
+        pending_uids.insert("charlie".to_string());
+
+        // Sync pending status
+        state.sync_pending_status(&pending_uids);
+
+        // Verify flags
+        assert!(state.get_chat("alice").unwrap().has_pending_messages);
+        assert!(!state.get_chat("bob").unwrap().has_pending_messages);
+        assert!(state.get_chat("charlie").unwrap().has_pending_messages);
+    }
+
+    #[test]
+    fn test_appstate_sync_pending_status_empty() {
+        use std::collections::HashSet;
+
+        let mut state = AppState::new();
+        state.add_chat("alice".to_string());
+        state.add_chat("bob".to_string());
+
+        // Mark all as having pending initially
+        state.get_chat_mut("alice").unwrap().mark_has_pending();
+        state.get_chat_mut("bob").unwrap().mark_has_pending();
+
+        // Sync with empty set
+        let pending_uids = HashSet::new();
+        state.sync_pending_status(&pending_uids);
+
+        // All should be cleared
+        assert!(!state.get_chat("alice").unwrap().has_pending_messages);
+        assert!(!state.get_chat("bob").unwrap().has_pending_messages);
+    }
+
+    #[test]
+    fn test_appstate_get_or_create_chat() {
+        let mut state = AppState::new();
+
+        // Get or create should create new chat
+        let chat = state.get_or_create_chat("new_contact");
+        assert_eq!(chat.contact_uid, "new_contact");
+        assert_eq!(state.chats.len(), 1);
+
+        // Get or create should return existing chat
+        let chat2 = state.get_or_create_chat("new_contact");
+        assert_eq!(chat2.contact_uid, "new_contact");
+        assert_eq!(state.chats.len(), 1); // Should not create duplicate
+    }
+
+    #[test]
+    fn test_appstate_get_chat() {
+        let mut state = AppState::new();
+        state.add_chat("alice".to_string());
+
+        // Get existing chat
+        let chat = state.get_chat("alice");
+        assert!(chat.is_some());
+        assert_eq!(chat.unwrap().contact_uid, "alice");
+
+        // Get non-existent chat
+        let chat = state.get_chat("bob");
+        assert!(chat.is_none());
+    }
+
+    #[test]
+    fn test_appstate_get_chat_mut() {
+        let mut state = AppState::new();
+        state.add_chat("alice".to_string());
+
+        // Get mutable reference and modify
+        if let Some(chat) = state.get_chat_mut("alice") {
+            chat.mark_has_pending();
+            chat.mark_unread();
+        }
+
+        // Verify changes persisted
+        let chat = state.get_chat("alice").unwrap();
+        assert!(chat.has_pending_messages);
+        assert!(chat.is_active);
+    }
+
+    #[test]
+    fn test_chat_serialization_with_pending_flag() {
+        let mut chat = Chat::new("contact_123".to_string());
+        chat.mark_has_pending();
+        chat.mark_unread();
+
+        // Add a message
+        let msg = Message {
+            id: "msg_1".to_string(),
+            sender: "sender".to_string(),
+            recipient: "contact_123".to_string(),
+            content: vec![1, 2, 3],
+            timestamp: 1000,
+            delivered: false,
+        };
+        chat.append_message(msg);
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&chat).expect("Failed to serialize");
+
+        // Deserialize
+        let loaded: Chat = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        // Verify all fields including pending flag
+        assert_eq!(loaded.contact_uid, "contact_123");
+        assert!(loaded.is_active);
+        assert!(loaded.has_pending_messages);
+        assert_eq!(loaded.messages.len(), 1);
     }
 }

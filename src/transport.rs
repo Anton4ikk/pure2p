@@ -52,8 +52,31 @@ pub enum DeliveryState {
     Failed,
 }
 
-/// Callback type for handling received messages
+/// Ping response structure
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PingResponse {
+    /// UID of the responding peer
+    pub uid: String,
+    /// Status message
+    pub status: String,
+}
+
+/// Message request structure for /message endpoint
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MessageRequest {
+    /// UID of the sender
+    pub from_uid: String,
+    /// Type of message (e.g., "text", "delete", "typing", etc.)
+    pub message_type: String,
+    /// Message payload (arbitrary bytes)
+    pub payload: Vec<u8>,
+}
+
+/// Callback type for handling received messages (legacy - for /output endpoint)
 pub type MessageHandler = Arc<dyn Fn(MessageEnvelope) + Send + Sync>;
+
+/// Callback type for handling received messages from /message endpoint
+pub type NewMessageHandler = Arc<dyn Fn(MessageRequest) + Send + Sync>;
 
 /// Network transport layer
 pub struct Transport {
@@ -61,10 +84,14 @@ pub struct Transport {
     local_addr: Option<SocketAddr>,
     /// Known peers
     peers: Arc<Mutex<Vec<Peer>>>,
-    /// Message handler callback
+    /// Message handler callback (legacy - for /output endpoint)
     message_handler: Arc<Mutex<Option<MessageHandler>>>,
+    /// New message handler callback (for /message endpoint)
+    new_message_handler: Arc<Mutex<Option<NewMessageHandler>>>,
     /// HTTP client for sending messages
     client: Client<HttpConnector, Full<Bytes>>,
+    /// Local UID for ping responses
+    local_uid: Arc<Mutex<Option<String>>>,
 }
 
 impl Transport {
@@ -76,16 +103,36 @@ impl Transport {
             local_addr: None,
             peers: Arc::new(Mutex::new(Vec::new())),
             message_handler: Arc::new(Mutex::new(None)),
+            new_message_handler: Arc::new(Mutex::new(None)),
             client,
+            local_uid: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Set the message handler callback
+    /// Set the local UID for this transport instance
+    pub async fn set_local_uid(&self, uid: String) {
+        let mut guard = self.local_uid.lock().await;
+        *guard = Some(uid);
+    }
+
+    /// Set the message handler callback (legacy - for /output endpoint)
     pub async fn set_message_handler<F>(&self, handler: F)
     where
         F: Fn(MessageEnvelope) + Send + Sync + 'static,
     {
         let mut guard = self.message_handler.lock().await;
+        *guard = Some(Arc::new(handler));
+    }
+
+    /// Set the new message handler callback (for /message endpoint)
+    ///
+    /// This handler receives MessageRequest objects from the /message endpoint.
+    /// The handler is responsible for storing messages in AppState via Chat.
+    pub async fn set_new_message_handler<F>(&self, handler: F)
+    where
+        F: Fn(MessageRequest) + Send + Sync + 'static,
+    {
+        let mut guard = self.new_message_handler.lock().await;
         *guard = Some(Arc::new(handler));
     }
 
@@ -104,6 +151,8 @@ impl Transport {
         self.local_addr = Some(actual_addr);
 
         let message_handler = self.message_handler.clone();
+        let new_message_handler = self.new_message_handler.clone();
+        let local_uid = self.local_uid.clone();
 
         // Spawn listener task
         tokio::spawn(async move {
@@ -114,10 +163,12 @@ impl Transport {
 
                         let io = TokioIo::new(stream);
                         let handler = message_handler.clone();
+                        let new_handler = new_message_handler.clone();
+                        let uid = local_uid.clone();
 
                         tokio::spawn(async move {
                             let service = service_fn(move |req| {
-                                handle_request(req, handler.clone())
+                                handle_request(req, handler.clone(), new_handler.clone(), uid.clone())
                             });
 
                             if let Err(e) = http1::Builder::new()
@@ -214,6 +265,163 @@ impl Transport {
         }
     }
 
+    /// Send a ping to a contact to test connectivity
+    ///
+    /// # Arguments
+    /// * `contact` - The contact to ping (uses the Contact struct from storage module)
+    ///
+    /// # Returns
+    /// * `Ok(PingResponse)` - Ping successful, contains UID and status
+    /// * `Err(Error)` - Ping failed (network error, timeout, etc.)
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pure2p::transport::Transport;
+    /// use pure2p::storage::Contact;
+    /// use chrono::{Utc, Duration};
+    ///
+    /// # async fn example() -> pure2p::Result<()> {
+    /// let transport = Transport::new();
+    /// let contact = Contact::new(
+    ///     "alice_uid".to_string(),
+    ///     "192.168.1.100:8080".to_string(),
+    ///     vec![1, 2, 3],
+    ///     Utc::now() + Duration::days(30),
+    /// );
+    ///
+    /// match transport.send_ping(&contact).await {
+    ///     Ok(response) => println!("Ping OK: {} - {}", response.uid, response.status),
+    ///     Err(e) => println!("Ping failed: {}", e),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_ping(&self, contact: &crate::storage::Contact) -> Result<PingResponse> {
+        info!("Sending ping to {} at {}", contact.uid, contact.ip);
+
+        // Construct the POST request to /ping
+        let url = format!("http://{}/ping", contact.ip);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(&url)
+            .header("Content-Type", "application/cbor")
+            .body(Full::new(Bytes::new()))
+            .map_err(|e| Error::Transport(format!("Failed to build ping request: {}", e)))?;
+
+        // Send the request
+        match self.client.request(req).await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    // Read the response body
+                    let body = response.collect().await
+                        .map_err(|e| Error::Transport(format!("Failed to read ping response: {}", e)))?
+                        .to_bytes();
+
+                    // Deserialize the ping response from CBOR
+                    let ping_response: PingResponse = serde_cbor::from_slice(&body)
+                        .map_err(|e| Error::CborSerialization(format!("Failed to deserialize ping response: {}", e)))?;
+
+                    info!("Ping successful: {} - {}", ping_response.uid, ping_response.status);
+                    Ok(ping_response)
+                } else {
+                    warn!("Ping failed with status {}: {}", response.status(), contact.ip);
+                    Err(Error::Transport(format!(
+                        "Ping failed with status {}",
+                        response.status()
+                    )))
+                }
+            }
+            Err(e) => {
+                error!("Failed to send ping to {}: {}", contact.ip, e);
+                Err(Error::Transport(format!("Ping send failed: {}", e)))
+            }
+        }
+    }
+
+    /// Send a message to a contact via the /message endpoint
+    ///
+    /// # Arguments
+    /// * `contact` - The contact to send the message to
+    /// * `from_uid` - The sender's UID
+    /// * `message_type` - Type of message (e.g., "text", "delete", "typing")
+    /// * `payload` - Message payload as bytes
+    ///
+    /// # Returns
+    /// * `Ok(())` - Message sent successfully
+    /// * `Err(Error)` - Failed to send message (caller should queue for retry)
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pure2p::transport::Transport;
+    /// use pure2p::storage::Contact;
+    /// use chrono::{Utc, Duration};
+    ///
+    /// # async fn example() -> pure2p::Result<()> {
+    /// let transport = Transport::new();
+    /// let contact = Contact::new(
+    ///     "alice_uid".to_string(),
+    ///     "192.168.1.100:8080".to_string(),
+    ///     vec![1, 2, 3],
+    ///     Utc::now() + Duration::days(30),
+    /// );
+    ///
+    /// let payload = b"Hello, Alice!".to_vec();
+    /// transport.send_message(&contact, "my_uid", "text", payload).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_message(
+        &self,
+        contact: &crate::storage::Contact,
+        from_uid: &str,
+        message_type: &str,
+        payload: Vec<u8>,
+    ) -> Result<()> {
+        info!("Sending {} message to {} at {}", message_type, contact.uid, contact.ip);
+
+        // Create message request
+        let msg_req = MessageRequest {
+            from_uid: from_uid.to_string(),
+            message_type: message_type.to_string(),
+            payload,
+        };
+
+        // Serialize to CBOR
+        let cbor_data = serde_cbor::to_vec(&msg_req)
+            .map_err(|e| Error::CborSerialization(format!("Failed to serialize message request: {}", e)))?;
+
+        // Construct the POST request to /message
+        let url = format!("http://{}/message", contact.ip);
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(&url)
+            .header("Content-Type", "application/cbor")
+            .body(Full::new(Bytes::from(cbor_data)))
+            .map_err(|e| Error::Transport(format!("Failed to build message request: {}", e)))?;
+
+        // Send the request
+        match self.client.request(req).await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    info!("Message sent successfully to {}", contact.ip);
+                    Ok(())
+                } else {
+                    warn!("Message send failed with status {}: {}", response.status(), contact.ip);
+                    Err(Error::Transport(format!(
+                        "Message send failed with status {}",
+                        response.status()
+                    )))
+                }
+            }
+            Err(e) => {
+                error!("Failed to send message to {}: {}", contact.ip, e);
+                Err(Error::Transport(format!("Message send failed: {}", e)))
+            }
+        }
+    }
+
     /// Get list of known peers
     pub async fn peers(&self) -> Vec<Peer> {
         let peers = self.peers.lock().await;
@@ -236,6 +444,8 @@ impl Default for Transport {
 async fn handle_request(
     req: Request<Incoming>,
     message_handler: Arc<Mutex<Option<MessageHandler>>>,
+    new_message_handler: Arc<Mutex<Option<NewMessageHandler>>>,
+    local_uid: Arc<Mutex<Option<String>>>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/output") => {
@@ -267,6 +477,81 @@ async fn handle_request(
                 }
                 Err(e) => {
                     error!("Failed to deserialize message: {}", e);
+                    Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Full::new(Bytes::from(format!(
+                            "Invalid message format: {}",
+                            e
+                        ))))
+                        .unwrap())
+                }
+            }
+        }
+        (&Method::POST, "/ping") => {
+            debug!("Received POST /ping request");
+
+            // Get local UID
+            let uid_guard = local_uid.lock().await;
+            let uid = uid_guard.as_ref().map(|s| s.clone()).unwrap_or_else(|| "unknown".to_string());
+            drop(uid_guard);
+
+            // Create ping response
+            let response = PingResponse {
+                uid,
+                status: "ok".to_string(),
+            };
+
+            // Serialize to CBOR
+            match serde_cbor::to_vec(&response) {
+                Ok(cbor_data) => {
+                    info!("Responding to ping");
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/cbor")
+                        .body(Full::new(Bytes::from(cbor_data)))
+                        .unwrap())
+                }
+                Err(e) => {
+                    error!("Failed to serialize ping response: {}", e);
+                    Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Full::new(Bytes::from(format!(
+                            "Failed to serialize response: {}",
+                            e
+                        ))))
+                        .unwrap())
+                }
+            }
+        }
+        (&Method::POST, "/message") => {
+            debug!("Received POST /message request");
+
+            // Read the body
+            let body = req.collect().await?.to_bytes();
+
+            // Deserialize the message request from CBOR
+            match serde_cbor::from_slice::<MessageRequest>(&body) {
+                Ok(msg_req) => {
+                    info!(
+                        "Received message from {} (type: {})",
+                        msg_req.from_uid, msg_req.message_type
+                    );
+
+                    // Call the new message handler if set
+                    let handler_guard = new_message_handler.lock().await;
+                    if let Some(handler) = handler_guard.as_ref() {
+                        handler(msg_req);
+                    } else {
+                        warn!("No message handler set for /message endpoint, message dropped");
+                    }
+
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .body(Full::new(Bytes::from("Message received")))
+                        .unwrap())
+                }
+                Err(e) => {
+                    error!("Failed to deserialize message request: {}", e);
                     Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Full::new(Bytes::from(format!(
@@ -637,5 +922,402 @@ mod tests {
             },
         );
         log_delivery_state("127.0.0.1:8080", &DeliveryState::Failed);
+    }
+
+    #[test]
+    fn test_ping_response_creation() {
+        let response = PingResponse {
+            uid: "test_uid_123".to_string(),
+            status: "ok".to_string(),
+        };
+
+        assert_eq!(response.uid, "test_uid_123");
+        assert_eq!(response.status, "ok");
+    }
+
+    #[test]
+    fn test_ping_response_serialization() {
+        let response = PingResponse {
+            uid: "alice_uid".to_string(),
+            status: "ok".to_string(),
+        };
+
+        // Serialize to CBOR
+        let cbor = serde_cbor::to_vec(&response).expect("Failed to serialize");
+
+        // Deserialize from CBOR
+        let deserialized: PingResponse = serde_cbor::from_slice(&cbor).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.uid, response.uid);
+        assert_eq!(deserialized.status, response.status);
+    }
+
+    #[tokio::test]
+    async fn test_set_local_uid() {
+        let transport = Transport::new();
+
+        transport.set_local_uid("test_uid_456".to_string()).await;
+
+        let uid_guard = transport.local_uid.lock().await;
+        assert_eq!(uid_guard.as_ref().unwrap(), "test_uid_456");
+    }
+
+    #[tokio::test]
+    async fn test_ping_endpoint() {
+        let mut transport = Transport::new();
+
+        // Set local UID
+        transport.set_local_uid("server_uid_789".to_string()).await;
+
+        // Start transport on a random port
+        let addr = "127.0.0.1:0".parse().unwrap();
+        transport.start(addr).await.expect("Failed to start transport");
+
+        // Give the server a moment to start
+        sleep(Duration::from_millis(100)).await;
+
+        let local_addr = transport.local_addr().expect("No local address");
+
+        // Create a contact for pinging
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let contact = Contact::new(
+            "server_uid_789".to_string(),
+            local_addr.to_string(),
+            vec![1, 2, 3],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Send ping
+        let response = transport.send_ping(&contact).await.expect("Ping failed");
+
+        // Verify response
+        assert_eq!(response.uid, "server_uid_789");
+        assert_eq!(response.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_ping_unknown_uid() {
+        let mut transport = Transport::new();
+
+        // Don't set local UID, should default to "unknown"
+
+        // Start transport on a random port
+        let addr = "127.0.0.1:0".parse().unwrap();
+        transport.start(addr).await.expect("Failed to start transport");
+
+        sleep(Duration::from_millis(100)).await;
+
+        let local_addr = transport.local_addr().expect("No local address");
+
+        // Create a contact for pinging
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let contact = Contact::new(
+            "any_uid".to_string(),
+            local_addr.to_string(),
+            vec![1, 2, 3],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Send ping
+        let response = transport.send_ping(&contact).await.expect("Ping failed");
+
+        // Should respond with "unknown" since UID wasn't set
+        assert_eq!(response.uid, "unknown");
+        assert_eq!(response.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_ping_unreachable_peer() {
+        let transport = Transport::new();
+
+        // Create a contact pointing to a non-existent server
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let contact = Contact::new(
+            "unreachable_uid".to_string(),
+            "127.0.0.1:59999".to_string(), // Unlikely to be in use
+            vec![1, 2, 3],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Ping should fail
+        let result = transport.send_ping(&contact).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ping_multiple_peers() {
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        // Start two transport instances
+        let mut transport1 = Transport::new();
+        let mut transport2 = Transport::new();
+
+        transport1.set_local_uid("peer1_uid".to_string()).await;
+        transport2.set_local_uid("peer2_uid".to_string()).await;
+
+        // Start both transports
+        transport1.start("127.0.0.1:0".parse().unwrap()).await.expect("Failed to start transport1");
+        transport2.start("127.0.0.1:0".parse().unwrap()).await.expect("Failed to start transport2");
+
+        sleep(Duration::from_millis(100)).await;
+
+        let addr1 = transport1.local_addr().expect("No local address for transport1");
+        let addr2 = transport2.local_addr().expect("No local address for transport2");
+
+        // Create contacts
+        let contact1 = Contact::new(
+            "peer1_uid".to_string(),
+            addr1.to_string(),
+            vec![1],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        let contact2 = Contact::new(
+            "peer2_uid".to_string(),
+            addr2.to_string(),
+            vec![2],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Ping from transport1 to transport2
+        let response = transport1.send_ping(&contact2).await.expect("Ping to peer2 failed");
+        assert_eq!(response.uid, "peer2_uid");
+
+        // Ping from transport2 to transport1
+        let response = transport2.send_ping(&contact1).await.expect("Ping to peer1 failed");
+        assert_eq!(response.uid, "peer1_uid");
+    }
+
+    #[test]
+    fn test_message_request_creation() {
+        let msg_req = MessageRequest {
+            from_uid: "sender_uid".to_string(),
+            message_type: "text".to_string(),
+            payload: b"Hello, world!".to_vec(),
+        };
+
+        assert_eq!(msg_req.from_uid, "sender_uid");
+        assert_eq!(msg_req.message_type, "text");
+        assert_eq!(msg_req.payload, b"Hello, world!");
+    }
+
+    #[test]
+    fn test_message_request_serialization() {
+        let msg_req = MessageRequest {
+            from_uid: "alice_uid".to_string(),
+            message_type: "text".to_string(),
+            payload: vec![1, 2, 3, 4, 5],
+        };
+
+        // Serialize to CBOR
+        let cbor = serde_cbor::to_vec(&msg_req).expect("Failed to serialize");
+
+        // Deserialize from CBOR
+        let deserialized: MessageRequest = serde_cbor::from_slice(&cbor).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.from_uid, msg_req.from_uid);
+        assert_eq!(deserialized.message_type, msg_req.message_type);
+        assert_eq!(deserialized.payload, msg_req.payload);
+    }
+
+    #[tokio::test]
+    async fn test_set_new_message_handler() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let transport = Transport::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+
+        transport.set_new_message_handler(move |_msg| {
+            called_clone.store(true, Ordering::SeqCst);
+        }).await;
+
+        // Verify handler is set
+        let handler_guard = transport.new_message_handler.lock().await;
+        assert!(handler_guard.is_some());
+
+        // Call the handler
+        if let Some(handler) = handler_guard.as_ref() {
+            let test_msg = MessageRequest {
+                from_uid: "test".to_string(),
+                message_type: "text".to_string(),
+                payload: vec![],
+            };
+            handler(test_msg);
+        }
+
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_message_endpoint() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut transport = Transport::new();
+
+        // Set up message handler
+        let received = Arc::new(AtomicBool::new(false));
+        let received_clone = received.clone();
+
+        transport.set_new_message_handler(move |msg| {
+            assert_eq!(msg.from_uid, "sender_uid");
+            assert_eq!(msg.message_type, "text");
+            assert_eq!(msg.payload, b"Test message");
+            received_clone.store(true, Ordering::SeqCst);
+        }).await;
+
+        // Start transport
+        transport.start("127.0.0.1:0".parse().unwrap()).await.expect("Failed to start transport");
+        sleep(Duration::from_millis(100)).await;
+
+        let local_addr = transport.local_addr().expect("No local address");
+
+        // Create a contact
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let contact = Contact::new(
+            "receiver_uid".to_string(),
+            local_addr.to_string(),
+            vec![1, 2, 3],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Send message
+        transport.send_message(&contact, "sender_uid", "text", b"Test message".to_vec())
+            .await
+            .expect("Failed to send message");
+
+        // Give handler time to process
+        sleep(Duration::from_millis(100)).await;
+
+        // Verify message was received
+        assert!(received.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_message_endpoint_different_types() {
+        use std::sync::{Arc, Mutex as StdMutex};
+
+        let mut transport = Transport::new();
+
+        // Track received messages
+        let received_messages = Arc::new(StdMutex::new(Vec::new()));
+        let received_clone = received_messages.clone();
+
+        transport.set_new_message_handler(move |msg| {
+            received_clone.lock().unwrap().push((msg.message_type.clone(), msg.payload.clone()));
+        }).await;
+
+        // Start transport
+        transport.start("127.0.0.1:0".parse().unwrap()).await.expect("Failed to start transport");
+        sleep(Duration::from_millis(100)).await;
+
+        let local_addr = transport.local_addr().expect("No local address");
+
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let contact = Contact::new(
+            "receiver_uid".to_string(),
+            local_addr.to_string(),
+            vec![1, 2, 3],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Send different message types
+        transport.send_message(&contact, "sender", "text", b"Hello".to_vec()).await.expect("Failed to send text");
+        transport.send_message(&contact, "sender", "delete", vec![]).await.expect("Failed to send delete");
+        transport.send_message(&contact, "sender", "typing", vec![1]).await.expect("Failed to send typing");
+
+        sleep(Duration::from_millis(200)).await;
+
+        let messages = received_messages.lock().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].0, "text");
+        assert_eq!(messages[0].1, b"Hello");
+        assert_eq!(messages[1].0, "delete");
+        assert_eq!(messages[2].0, "typing");
+    }
+
+    #[tokio::test]
+    async fn test_message_unreachable_peer() {
+        let transport = Transport::new();
+
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let contact = Contact::new(
+            "unreachable".to_string(),
+            "127.0.0.1:59998".to_string(),
+            vec![1, 2, 3],
+            Utc::now() + ChronoDuration::days(30),
+        );
+
+        // Should fail to send
+        let result = transport.send_message(&contact, "sender", "text", b"Test".to_vec()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_message_bidirectional() {
+        use std::sync::{Arc, Mutex as StdMutex};
+        use crate::storage::Contact;
+        use chrono::{Utc, Duration as ChronoDuration};
+
+        let mut transport1 = Transport::new();
+        let mut transport2 = Transport::new();
+
+        let messages1 = Arc::new(StdMutex::new(Vec::new()));
+        let messages2 = Arc::new(StdMutex::new(Vec::new()));
+
+        let m1 = messages1.clone();
+        let m2 = messages2.clone();
+
+        transport1.set_new_message_handler(move |msg| {
+            m1.lock().unwrap().push(msg);
+        }).await;
+
+        transport2.set_new_message_handler(move |msg| {
+            m2.lock().unwrap().push(msg);
+        }).await;
+
+        transport1.start("127.0.0.1:0".parse().unwrap()).await.expect("Failed to start t1");
+        transport2.start("127.0.0.1:0".parse().unwrap()).await.expect("Failed to start t2");
+
+        sleep(Duration::from_millis(100)).await;
+
+        let addr1 = transport1.local_addr().unwrap();
+        let addr2 = transport2.local_addr().unwrap();
+
+        let contact1 = Contact::new("peer1".to_string(), addr1.to_string(), vec![1], Utc::now() + ChronoDuration::days(30));
+        let contact2 = Contact::new("peer2".to_string(), addr2.to_string(), vec![2], Utc::now() + ChronoDuration::days(30));
+
+        // Send from 1 to 2
+        transport1.send_message(&contact2, "peer1", "text", b"Hello from 1".to_vec()).await.expect("Send 1->2 failed");
+
+        // Send from 2 to 1
+        transport2.send_message(&contact1, "peer2", "text", b"Hello from 2".to_vec()).await.expect("Send 2->1 failed");
+
+        sleep(Duration::from_millis(200)).await;
+
+        // Verify messages received
+        let msgs1 = messages1.lock().unwrap();
+        let msgs2 = messages2.lock().unwrap();
+
+        assert_eq!(msgs1.len(), 1);
+        assert_eq!(msgs1[0].from_uid, "peer2");
+        assert_eq!(msgs1[0].payload, b"Hello from 2");
+
+        assert_eq!(msgs2.len(), 1);
+        assert_eq!(msgs2[0].from_uid, "peer1");
+        assert_eq!(msgs2[0].payload, b"Hello from 1");
     }
 }
