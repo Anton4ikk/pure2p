@@ -1396,7 +1396,6 @@ mod tests {
     #[test]
     fn test_integration_appstate_queue_sync() {
         use crate::storage::AppState;
-        use std::collections::HashSet;
 
         let mut queue = MessageQueue::new().expect("Failed to create queue");
         let mut app_state = AppState::new();

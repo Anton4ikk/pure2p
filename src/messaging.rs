@@ -1206,7 +1206,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         // Setup: Create sender and receiver with app states
-        let mut sender_transport = Transport::new();
+        let sender_transport = Transport::new();
         let mut receiver_transport = Transport::new();
 
         let mut sender_state = AppState::new();
@@ -1959,7 +1959,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         // Setup sender and receiver
-        let mut sender_transport = Transport::new();
+        let sender_transport = Transport::new();
         let mut receiver_transport = Transport::new();
 
         let sender_state = Arc::new(Mutex::new(AppState::new()));

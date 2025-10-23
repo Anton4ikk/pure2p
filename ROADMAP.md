@@ -29,7 +29,14 @@ Foundational P2P messaging with command-line interface.
 - [x] Chat conversation structures
 - [x] Chat pending message tracking (`has_pending_messages` flag)
 - [x] Application state persistence (JSON/CBOR)
-- [x] Global settings management
+- [x] **Global settings management** with persistent storage
+  - [x] Settings load/save to JSON file (`settings.json`)
+  - [x] `update_retry_interval()` with auto-save
+  - [x] `retry_interval_minutes` and `storage_path` fields
+  - [x] Automatic sync between minutes and milliseconds
+  - [x] **SettingsManager** - Thread-safe UI API with Arc<RwLock>
+  - [x] Async getters/setters with automatic persistence
+  - [x] Concurrent access support for TUI/GUI layers
 - [x] AppState chat management methods (get_chat, get_or_create_chat, sync_pending_status)
 - [x] Queue method to get pending contact UIDs
 - [x] Transport `/ping` endpoint for connectivity checks

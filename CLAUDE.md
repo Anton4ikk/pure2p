@@ -165,12 +165,38 @@ Success? Yes → Done                          [UI]
 - Supports JSON and CBOR serialization
 - Methods: `save()`, `load()`, `save_cbor()`, `load_cbor()`
 
-**`Settings`** - Configurable parameters
+**`Settings`** - Persistent configuration (JSON file)
+- `retry_interval_minutes`: Retry interval in minutes (default 10)
+- `storage_path`: Path for application data (default "./data")
 - `default_contact_expiry_days`: Contact token validity (default 30)
 - `max_message_retries`: Retry limit (default 5)
 - `retry_base_delay_ms`: Initial retry delay (default 1000)
 - `global_retry_interval_ms`: Periodic retry interval (default 600,000 = 10 min)
 - `enable_notifications`: Notification toggle
+- Methods:
+  - `load(path)` - Load from JSON file (returns defaults if not found)
+  - `save(path)` - Save to JSON file (creates parent dirs if needed)
+  - `update_retry_interval(minutes, path)` - Update interval and auto-save
+  - `get_retry_interval_minutes()` - Get retry interval in minutes
+  - `set_global_retry_interval_ms(ms)` - Set interval in milliseconds (syncs minutes)
+
+**`SettingsManager`** - Thread-safe settings API for UI layers
+- Built on `Arc<RwLock<Settings>>` for concurrent access
+- Async-first API with tokio::sync::RwLock
+- Automatic persistence on all updates
+- Cloneable for sharing across threads/tasks
+- Methods:
+  - `new(path)` - Create manager and load settings
+  - `get_retry_interval_minutes()` - Async getter
+  - `set_retry_interval_minutes(minutes)` - Async setter with auto-save
+  - `get_storage_path()` / `set_storage_path(path)` - Storage path access
+  - `get_notifications_enabled()` / `set_notifications_enabled(bool)` - Toggle notifications
+  - `get_max_message_retries()` / `set_max_message_retries(u32)` - Retry config
+  - `get_default_contact_expiry_days()` / `set_default_contact_expiry_days(u32)` - Contact expiry
+  - `get_all()` - Get clone of all settings
+  - `update(fn)` - Update multiple settings atomically
+  - `reload()` - Reload from disk
+  - `save()` - Manually trigger save
 
 **Contact Tokens**
 - `generate_contact_token(ip, pubkey, expiry)`: Creates base64-encoded CBOR token
@@ -262,7 +288,11 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
   - `get_chat(uid)` / `get_chat_mut(uid)` - Retrieve chat by contact UID
   - `get_or_create_chat(uid)` - Get existing or create new chat
   - `add_chat(uid)` - Add new chat
-- `Settings` allows runtime configuration updates
+- `Settings` struct provides persistent configuration management
+  - Load/save from JSON file with `load()` and `save()` methods
+  - Auto-save on updates via `update_retry_interval()`
+  - Automatic sync between `retry_interval_minutes` and `global_retry_interval_ms`
+  - Creates parent directories automatically on save
 - Active/inactive status tracking for contacts and chats
 - Expiry validation prevents use of outdated contact information
 
