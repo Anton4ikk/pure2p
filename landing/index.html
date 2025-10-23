@@ -14,7 +14,7 @@
   --line: #dddddd;
   --good: #16a34a;
   --bad: #dc2626;
-  --warn: #b45309;
+  --warn: #eab308;
   --accent: #2563eb;
   --radius: 12px;
 
@@ -160,6 +160,7 @@ p.muted { color: var(--muted); }
 }
 @media (min-width: 800px) {
   .row { grid-template-columns: 1fr 1fr; }
+  .row.three-col { grid-template-columns: 1fr 1fr 1fr; }
 }
 .card {
   border: 2px solid var(--line);
@@ -247,48 +248,54 @@ footer {
 </header>
   <main>
     <section class="wrap section">
-      <h2>The problem with “secure” messengers</h2>
+      <h2>The problem with "secure" messengers</h2>
       <p class="muted">If there is any server, relay, or bootstrap node, you must trust it. Trust is a vulnerability.</p>
       <div class="row">
-      <figure class="card">
-        <svg viewBox="0 0 600 260" role="img" aria-labelledby="problem-diagram">
-          <title id="problem-diagram">Server-mediated model</title>
+        <figure class="card">
+          <svg viewBox="0 0 600 260" role="img" aria-labelledby="problem-diagram">
+            <title id="problem-diagram">Server-mediated model</title>
 
-          <!-- User A -->
-          <rect x="60" y="30" width="140" height="60" rx="10" stroke="currentColor" fill="none"/>
-          <text x="130" y="65" text-anchor="middle" fill="var(--fg)">User A</text>
+            <!-- User A -->
+            <rect x="60" y="30" width="140" height="60" rx="10" stroke="currentColor" fill="none"/>
+            <text x="130" y="65" text-anchor="middle" fill="var(--fg)">User A</text>
 
-          <!-- User B -->
-          <rect x="400" y="30" width="140" height="60" rx="10" stroke="currentColor" fill="none"/>
-          <text x="470" y="65" text-anchor="middle" fill="var(--fg)">User B</text>
+            <!-- User B -->
+            <rect x="400" y="30" width="140" height="60" rx="10" stroke="currentColor" fill="none"/>
+            <text x="470" y="65" text-anchor="middle" fill="var(--fg)">User B</text>
 
-          <!-- Server -->
-          <rect x="220" y="150" width="160" height="80" rx="12" stroke="currentColor" fill="none"/>
-          <text x="300" y="195" text-anchor="middle" fill="var(--fg)">Server</text>
+            <!-- Server -->
+            <rect x="220" y="150" width="160" height="80" rx="12" stroke="currentColor" fill="none"/>
+            <text x="300" y="195" text-anchor="middle" fill="var(--fg)">Server</text>
 
-          <!-- Vertical connections -->
-          <line x1="130" y1="90" x2="300" y2="150" stroke="var(--bad)" stroke-width="2"/>
-          <line x1="470" y1="90" x2="300" y2="150" stroke="var(--bad)" stroke-width="2"/>
-        </svg>
-        <figcaption style="margin-top:.6rem;font-size:.9rem;color:var(--muted)">
-          All messages flow through a server. Metadata leaks, storage, and possible key substitution.
-        </figcaption>
-      </figure>
+            <!-- Vertical connections -->
+            <line x1="130" y1="90" x2="300" y2="150" stroke="var(--bad)" stroke-width="2"/>
+            <line x1="470" y1="90" x2="300" y2="150" stroke="var(--bad)" stroke-width="2"/>
+          </svg>
+          <figcaption style="margin-top:.6rem;font-size:.9rem;color:var(--muted)">
+            All messages flow through a server. Metadata leaks, storage, and possible key substitution.
+          </figcaption>
+        </figure>
         <div class="card">
           <ul class="bullets">
             <li><span class="dot bad"></span><div><strong>Metadata:</strong> servers know who talks, when, how often.</div></li>
             <li><span class="dot bad"></span><div><strong>Compromise:</strong> servers can be hacked or seized.</div></li>
-            <li><span class="dot bad"></span><div><strong>False promises:</strong> “we don’t store” — unverifiable.</div></li>
+            <li><span class="dot bad"></span><div><strong>False promises:</strong> "we don't store" — unverifiable.</div></li>
             <li><span class="dot bad"></span><div><strong>Control:</strong> servers can censor, block, rate-limit.</div></li>
           </ul>
         </div>
-        <div class="card">
-          <ul class="bullets">
-            <li><span class="dot bad"></span><div><strong>Signal:</strong> E2EE is strong, but all delivery and presence still go via Signal servers.</div></li>
-            <li><span class="dot bad"></span><div><strong>Telegram:</strong> most chats are cloud-stored (not E2EE), and even Secret Chats depend on Telegram infrastructure.</div></li>
-            <li><span class="dot bad"></span><div><strong>Matrix / Element:</strong> federated servers; you must trust your homeserver and its operators.</div></li>
-          </ul>
-        </div>
+      </div>
+    </section>
+
+    <section class="wrap section">
+      <h2>What about alternatives?</h2>
+      <p class="muted">Popular messengers still depend on infrastructure. True P2P tools lack usability.</p>
+      <div class="card">
+        <ul class="bullets">
+          <li><span class="dot bad"></span><div><strong>Signal:</strong> E2EE is strong, but all delivery and presence still go via Signal servers.</div></li>
+          <li><span class="dot bad"></span><div><strong>Telegram:</strong> most chats are cloud-stored (not E2EE), and even Secret Chats depend on Telegram infrastructure.</div></li>
+          <li><span class="dot bad"></span><div><strong>Matrix / Element:</strong> federated servers; you must trust your homeserver and its operators.</div></li>
+          <li><span class="dot warn"></span><div><strong>netcat:</strong> true P2P, but has no app — just raw terminal commands.</div></li>
+        </ul>
       </div>
     </section>
 
@@ -321,6 +328,7 @@ footer {
             <li><span class="dot good"></span><div><strong>Local storage only:</strong> your device = your archive.</div></li>
             <li><span class="dot good"></span><div><strong>No metadata:</strong> no third-party logs, no exhaust.</div></li>
             <li><span class="dot good"></span><div><strong>Honest trade-off:</strong> privacy prioritized over comfort.</div></li>
+            <li><span class="dot good"></span><div><strong>Comfortable app:</strong> for everyday use, not just terminal geeks.</div></li>
           </ul>
         </div>
       </div>
@@ -328,7 +336,7 @@ footer {
 
     <section class="wrap section">
       <h2>Mobile & desktop constraints</h2>
-      <div class="row">
+      <div class="row three-col">
         <div class="card">
           <h3>Delivery timing</h3>
           <p class="muted">Messages deliver only when both peers are online. Otherwise they remain queued locally.</p>
@@ -340,6 +348,62 @@ footer {
         <div class="card">
           <h3>Sleep / power</h3>
           <p class="muted">Sleeping or powered-off devices cannot accept messages. That’s the cost of no middlemen.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section">
+      <h2>Current status</h2>
+      <p class="muted">v0.2 complete. Working TUI client with core P2P messaging.</p>
+      <div class="row">
+        <div class="card">
+          <h3>What works now</h3>
+          <ul class="bullets">
+            <li><span class="dot good"></span><div><strong>Core messaging:</strong> Direct P2P with queue & retry</div></li>
+            <li><span class="dot good"></span><div><strong>TUI client:</strong> Terminal interface for macOS/Linux/Windows</div></li>
+            <li><span class="dot good"></span><div><strong>Contact sharing:</strong> Manual token exchange</div></li>
+            <li><span class="dot good"></span><div><strong>Local storage:</strong> Chats & contacts persist on device</div></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Known limitations</h3>
+          <ul class="bullets">
+            <li><span class="dot warn"></span><div><strong>No encryption:</strong> Messages in plaintext (coming in v0.3)</div></li>
+            <li><span class="dot warn"></span><div><strong>No NAT traversal:</strong> Port forwarding needed (coming in v0.3)</div></li>
+            <li><span class="dot warn"></span><div><strong>Text only:</strong> No files/media yet (coming in v0.4)</div></li>
+            <li><span class="dot warn"></span><div><strong>Prototype:</strong> Not production-ready</div></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap section">
+      <h2>Roadmap</h2>
+      <p class="muted">Building privacy-first, step by step. No timelines — quality over speed.</p>
+      <div class="row three-col">
+        <div class="card">
+          <h3>v0.3 — NAT Traversal</h3>
+          <ul class="bullets">
+            <li><span class="dot good"></span><div><strong>E2E encryption:</strong> ChaCha20-Poly1305 + Ed25519</div></li>
+            <li><span class="dot good"></span><div><strong>Hole punching:</strong> P2P across NAT without relays</div></li>
+            <li><span class="dot good"></span><div><strong>Optional STUN:</strong> Self-hosted coordination</div></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>v0.4 — Desktop Apps</h3>
+          <ul class="bullets">
+            <li><span class="dot good"></span><div><strong>GUI clients:</strong> macOS, Windows, Linux (Tauri)</div></li>
+            <li><span class="dot good"></span><div><strong>Rich media:</strong> Files, images, reactions</div></li>
+            <li><span class="dot good"></span><div><strong>System tray:</strong> Background service & notifications</div></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>v0.5 — Mobile Apps</h3>
+          <ul class="bullets">
+            <li><span class="dot good"></span><div><strong>iOS & Android:</strong> Native apps with Rust core</div></li>
+            <li><span class="dot good"></span><div><strong>QR scanning:</strong> Easy contact exchange</div></li>
+            <li><span class="dot warn"></span><div><strong>No background:</strong> Foreground service only (by design)</div></li>
+          </ul>
         </div>
       </div>
     </section>
