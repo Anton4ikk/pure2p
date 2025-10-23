@@ -193,6 +193,20 @@ pub struct Settings {
     pub retry_base_delay_ms: u64,
     /// Enable notifications
     pub enable_notifications: bool,
+    /// Global retry interval in milliseconds (default 10 minutes)
+    pub global_retry_interval_ms: u64,
+}
+
+impl Settings {
+    /// Update the global retry interval at runtime
+    pub fn set_global_retry_interval_ms(&mut self, interval_ms: u64) {
+        self.global_retry_interval_ms = interval_ms;
+    }
+
+    /// Get the global retry interval in milliseconds
+    pub fn get_global_retry_interval_ms(&self) -> u64 {
+        self.global_retry_interval_ms
+    }
 }
 
 impl Default for Settings {
@@ -203,6 +217,7 @@ impl Default for Settings {
             max_message_retries: 5,
             retry_base_delay_ms: 1000,
             enable_notifications: true,
+            global_retry_interval_ms: 600_000, // 10 minutes = 600,000 ms
         }
     }
 }
@@ -772,6 +787,37 @@ mod tests {
         assert_eq!(settings.max_message_retries, 5);
         assert_eq!(settings.retry_base_delay_ms, 1000);
         assert!(settings.enable_notifications);
+        assert_eq!(settings.global_retry_interval_ms, 600_000); // 10 minutes
+    }
+
+    #[test]
+    fn test_settings_global_retry_interval() {
+        let mut settings = Settings::default();
+
+        // Default should be 10 minutes (600,000 ms)
+        assert_eq!(settings.get_global_retry_interval_ms(), 600_000);
+
+        // Update to 5 minutes
+        settings.set_global_retry_interval_ms(300_000);
+        assert_eq!(settings.get_global_retry_interval_ms(), 300_000);
+
+        // Update to 30 minutes
+        settings.set_global_retry_interval_ms(1_800_000);
+        assert_eq!(settings.get_global_retry_interval_ms(), 1_800_000);
+    }
+
+    #[test]
+    fn test_settings_runtime_update() {
+        let mut settings = Settings::default();
+
+        // Change multiple settings at runtime
+        settings.set_global_retry_interval_ms(120_000); // 2 minutes
+        settings.max_message_retries = 10;
+        settings.enable_notifications = false;
+
+        assert_eq!(settings.global_retry_interval_ms, 120_000);
+        assert_eq!(settings.max_message_retries, 10);
+        assert!(!settings.enable_notifications);
     }
 
     #[test]

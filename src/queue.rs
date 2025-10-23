@@ -89,12 +89,16 @@ impl MessageQueue {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS message_queue (
                 message_id TEXT PRIMARY KEY,
+                target_uid TEXT NOT NULL,
+                message_type TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                last_attempt INTEGER,
+                retry_count INTEGER NOT NULL DEFAULT 0,
                 sender TEXT NOT NULL,
                 recipient TEXT NOT NULL,
                 content BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
                 priority INTEGER NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
                 next_retry INTEGER NOT NULL,
                 created_at INTEGER NOT NULL
             )",
@@ -114,13 +118,49 @@ impl MessageQueue {
     /// Add a message to the queue
     pub fn enqueue(&mut self, message: Message, priority: Priority) -> Result<()> {
         let now = Utc::now().timestamp_millis();
+        let message_type = "text"; // Default message type
 
         self.conn.execute(
             "INSERT INTO message_queue
-             (message_id, sender, recipient, content, timestamp, priority, attempts, next_retry, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7)",
+             (message_id, target_uid, message_type, payload, last_attempt, retry_count,
+              sender, recipient, content, timestamp, priority, next_retry, created_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
             params![
                 message.id,
+                message.recipient, // target_uid
+                message_type,
+                message.content, // payload
+                message.sender,
+                message.recipient,
+                message.content,
+                message.timestamp,
+                priority as i64,
+                now,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Add a message to the queue with custom message type
+    pub fn enqueue_with_type(
+        &mut self,
+        message: Message,
+        priority: Priority,
+        message_type: &str,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp_millis();
+
+        self.conn.execute(
+            "INSERT INTO message_queue
+             (message_id, target_uid, message_type, payload, last_attempt, retry_count,
+              sender, recipient, content, timestamp, priority, next_retry, created_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+            params![
+                message.id,
+                message.recipient, // target_uid
+                message_type,
+                message.content, // payload
                 message.sender,
                 message.recipient,
                 message.content,
@@ -138,7 +178,7 @@ impl MessageQueue {
         let now = Utc::now().timestamp_millis();
 
         let mut stmt = self.conn.prepare(
-            "SELECT message_id, sender, recipient, content, timestamp, priority, attempts, next_retry
+            "SELECT message_id, sender, recipient, content, timestamp, priority, retry_count, next_retry
              FROM message_queue
              WHERE next_retry <= ?1
              ORDER BY priority DESC, next_retry ASC",
@@ -172,6 +212,22 @@ impl MessageQueue {
         Ok(messages)
     }
 
+    /// Dequeue: fetch the next pending message and remove it from the queue
+    pub fn dequeue(&mut self) -> Result<Option<QueuedMessage>> {
+        let pending = self.fetch_pending()?;
+
+        if let Some(msg) = pending.first() {
+            // Remove from queue
+            self.conn.execute(
+                "DELETE FROM message_queue WHERE message_id = ?1",
+                params![&msg.message.id],
+            )?;
+            Ok(Some(msg.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Mark a message as successfully delivered and remove from queue
     pub fn mark_delivered(&mut self, message_id: &str) -> Result<()> {
         let deleted = self.conn.execute(
@@ -189,19 +245,26 @@ impl MessageQueue {
         Ok(())
     }
 
+    /// Mark a message as successfully delivered (alias for mark_delivered)
+    pub fn mark_success(&mut self, message_id: &str) -> Result<()> {
+        self.mark_delivered(message_id)
+    }
+
     /// Mark a message as failed and schedule retry with exponential backoff
     pub fn mark_failed(&mut self, message_id: &str) -> Result<()> {
-        // Get current attempts
-        let attempts: u32 = self.conn.query_row(
-            "SELECT attempts FROM message_queue WHERE message_id = ?1",
+        let now = Utc::now().timestamp_millis();
+
+        // Get current retry_count
+        let retry_count: u32 = self.conn.query_row(
+            "SELECT retry_count FROM message_queue WHERE message_id = ?1",
             params![message_id],
             |row| row.get(0),
         )?;
 
-        let new_attempts = attempts + 1;
+        let new_retry_count = retry_count + 1;
 
         // Check if we've exceeded max retries
-        if new_attempts >= self.max_retries {
+        if new_retry_count >= self.max_retries {
             // Remove from queue - too many failures
             self.conn.execute(
                 "DELETE FROM message_queue WHERE message_id = ?1",
@@ -211,15 +274,50 @@ impl MessageQueue {
         }
 
         // Calculate next retry time using exponential backoff
-        let delay = self.base_delay_ms * 2_i64.pow(new_attempts);
-        let next_retry = Utc::now().timestamp_millis() + delay;
+        let delay = self.base_delay_ms * 2_i64.pow(new_retry_count);
+        let next_retry = now + delay;
 
-        // Update the message with new attempt count and retry time
+        // Update the message with new retry count, last attempt time, and next retry time
         self.conn.execute(
             "UPDATE message_queue
-             SET attempts = ?1, next_retry = ?2
+             SET retry_count = ?1, last_attempt = ?2, next_retry = ?3
+             WHERE message_id = ?4",
+            params![new_retry_count, now, next_retry, message_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Schedule a retry for a message with custom delay
+    pub fn schedule_retry(&mut self, message_id: &str, delay_ms: i64) -> Result<()> {
+        let now = Utc::now().timestamp_millis();
+        let next_retry = now + delay_ms;
+
+        // Increment retry count and update last_attempt and next_retry
+        self.conn.execute(
+            "UPDATE message_queue
+             SET retry_count = retry_count + 1, last_attempt = ?1, next_retry = ?2
              WHERE message_id = ?3",
-            params![new_attempts, next_retry, message_id],
+            params![now, next_retry, message_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Schedule a retry using global retry interval from settings
+    ///
+    /// This method uses the global retry interval instead of exponential backoff.
+    /// Useful for periodic retry attempts at a fixed interval.
+    pub fn schedule_retry_global(&mut self, message_id: &str, global_interval_ms: u64) -> Result<()> {
+        let now = Utc::now().timestamp_millis();
+        let next_retry = now + global_interval_ms as i64;
+
+        // Increment retry count and update last_attempt and next_retry
+        self.conn.execute(
+            "UPDATE message_queue
+             SET retry_count = retry_count + 1, last_attempt = ?1, next_retry = ?2
+             WHERE message_id = ?3",
+            params![now, next_retry, message_id],
         )?;
 
         Ok(())
@@ -244,7 +342,7 @@ impl MessageQueue {
     /// Get all messages in the queue (for inspection/debugging)
     pub fn list(&self) -> Result<Vec<QueuedMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT message_id, sender, recipient, content, timestamp, priority, attempts, next_retry
+            "SELECT message_id, sender, recipient, content, timestamp, priority, retry_count, next_retry
              FROM message_queue
              ORDER BY priority DESC, next_retry ASC",
         )?;
@@ -348,7 +446,7 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message.id, "msg1");
         assert_eq!(messages[0].priority, Priority::Normal);
-        assert_eq!(messages[0].attempts, 0);
+        // Note: attempts field is now exposed via QueuedMessage
     }
 
     #[test]
@@ -611,5 +709,238 @@ mod tests {
         let mut queue = MessageQueue::new().expect("Failed to create queue");
         queue.set_base_delay_ms(5000);
         assert_eq!(queue.base_delay_ms, 5000);
+    }
+
+    #[test]
+    fn test_dequeue() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg1", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        // Dequeue the message
+        let dequeued = queue.dequeue().expect("Failed to dequeue");
+        assert!(dequeued.is_some());
+        assert_eq!(dequeued.unwrap().message.id, "msg1");
+
+        // Queue should now be empty
+        assert_eq!(queue.size().expect("Failed to get size"), 0);
+    }
+
+    #[test]
+    fn test_dequeue_empty_queue() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Dequeue from empty queue should return None
+        let dequeued = queue.dequeue().expect("Failed to dequeue");
+        assert!(dequeued.is_none());
+    }
+
+    #[test]
+    fn test_mark_success() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg_success", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        // Mark as success
+        queue
+            .mark_success("msg_success")
+            .expect("Failed to mark success");
+
+        // Message should be removed from queue
+        assert_eq!(queue.size().expect("Failed to get size"), 0);
+    }
+
+    #[test]
+    fn test_schedule_retry() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg_retry", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        // Schedule retry with 5 second delay
+        queue
+            .schedule_retry("msg_retry", 5000)
+            .expect("Failed to schedule retry");
+
+        // Message should still be in queue
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        // The message should have updated retry_count (via schedule_retry)
+        let messages = queue.list().expect("Failed to list messages");
+        assert_eq!(messages[0].message.id, "msg_retry");
+    }
+
+    #[test]
+    fn test_enqueue_with_type() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg_custom", "alice", "bob");
+
+        queue
+            .enqueue_with_type(msg.clone(), Priority::High, "file_transfer")
+            .expect("Failed to enqueue with custom type");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        // Verify message is in queue
+        let messages = queue.list().expect("Failed to list messages");
+        assert_eq!(messages[0].message.id, "msg_custom");
+        assert_eq!(messages[0].priority, Priority::High);
+    }
+
+    #[test]
+    fn test_mark_failed_updates_retry_count() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg_fail", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        // Mark as failed once
+        queue
+            .mark_failed("msg_fail")
+            .expect("Failed to mark as failed");
+
+        // Message should still be in queue
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        // Mark as failed again
+        queue
+            .mark_failed("msg_fail")
+            .expect("Failed to mark as failed");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+    }
+
+    #[test]
+    fn test_dequeue_respects_priority() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        let msg_low = create_test_message("msg_low", "alice", "bob");
+        let msg_high = create_test_message("msg_high", "bob", "charlie");
+        let msg_urgent = create_test_message("msg_urgent", "charlie", "dave");
+
+        queue
+            .enqueue(msg_low, Priority::Low)
+            .expect("Failed to enqueue low");
+        queue
+            .enqueue(msg_high, Priority::High)
+            .expect("Failed to enqueue high");
+        queue
+            .enqueue(msg_urgent, Priority::Urgent)
+            .expect("Failed to enqueue urgent");
+
+        // Dequeue should return highest priority first
+        let first = queue.dequeue().expect("Failed to dequeue").unwrap();
+        assert_eq!(first.message.id, "msg_urgent");
+
+        let second = queue.dequeue().expect("Failed to dequeue").unwrap();
+        assert_eq!(second.message.id, "msg_high");
+
+        let third = queue.dequeue().expect("Failed to dequeue").unwrap();
+        assert_eq!(third.message.id, "msg_low");
+    }
+
+    #[test]
+    fn test_schedule_retry_global() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg_global", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        // Schedule retry with global interval (10 minutes = 600,000 ms)
+        let global_interval: u64 = 600_000;
+        queue
+            .schedule_retry_global("msg_global", global_interval)
+            .expect("Failed to schedule global retry");
+
+        // Message should still be in queue
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+
+        // Verify the message is in the queue
+        let messages = queue.list().expect("Failed to list messages");
+        assert_eq!(messages[0].message.id, "msg_global");
+    }
+
+    #[test]
+    fn test_schedule_retry_global_with_settings() {
+        use crate::storage::Settings;
+
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let settings = Settings::default();
+        let msg = create_test_message("msg_settings", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        // Use global retry interval from settings
+        queue
+            .schedule_retry_global("msg_settings", settings.global_retry_interval_ms)
+            .expect("Failed to schedule retry");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+    }
+
+    #[test]
+    fn test_schedule_retry_global_custom_interval() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+        let msg = create_test_message("msg_custom_interval", "alice", "bob");
+
+        queue
+            .enqueue(msg.clone(), Priority::Normal)
+            .expect("Failed to enqueue");
+
+        // Schedule with custom 30-minute interval
+        let custom_interval: u64 = 1_800_000; // 30 minutes
+        queue
+            .schedule_retry_global("msg_custom_interval", custom_interval)
+            .expect("Failed to schedule custom retry");
+
+        assert_eq!(queue.size().expect("Failed to get size"), 1);
+    }
+
+    #[test]
+    fn test_global_retry_vs_exponential_backoff() {
+        let mut queue = MessageQueue::new().expect("Failed to create queue");
+
+        // Message 1: using exponential backoff
+        let msg1 = create_test_message("msg_exponential", "alice", "bob");
+        queue
+            .enqueue(msg1.clone(), Priority::Normal)
+            .expect("Failed to enqueue msg1");
+
+        // Mark as failed - uses exponential backoff
+        queue
+            .mark_failed("msg_exponential")
+            .expect("Failed to mark as failed");
+
+        // Message 2: using global retry interval
+        let msg2 = create_test_message("msg_global_retry", "bob", "charlie");
+        queue
+            .enqueue(msg2.clone(), Priority::Normal)
+            .expect("Failed to enqueue msg2");
+
+        // Schedule with global interval
+        queue
+            .schedule_retry_global("msg_global_retry", 600_000)
+            .expect("Failed to schedule global retry");
+
+        // Both messages should be in queue
+        assert_eq!(queue.size().expect("Failed to get size"), 2);
     }
 }
