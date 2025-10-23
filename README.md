@@ -97,8 +97,9 @@ graph TB
 
 - **Crypto**: Ed25519 keypairs, SHA-256 UID derivation
 - **Protocol**: CBOR-serialized message envelopes
-- **Transport**: HTTP/1.1 server with POST `/output` endpoint
-- **Queue**: SQLite-backed retry queue with exponential backoff
+- **Transport**: HTTP/1.1 server with `/output`, `/ping`, and `/message` endpoints
+- **Queue**: SQLite-backed retry queue with exponential backoff and startup retry
+- **Storage**: Contact tokens, chat structures, and application state persistence
 
 **See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture details and [CLAUDE.md](CLAUDE.md) for implementation notes.**
 

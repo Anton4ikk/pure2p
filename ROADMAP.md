@@ -27,8 +27,14 @@ Foundational P2P messaging with command-line interface.
 - [x] Contact management structures with expiry tracking
 - [x] Contact token generation/parsing (base64-encoded CBOR)
 - [x] Chat conversation structures
+- [x] Chat pending message tracking (`has_pending_messages` flag)
 - [x] Application state persistence (JSON/CBOR)
 - [x] Global settings management
+- [x] AppState chat management methods (get_chat, get_or_create_chat, sync_pending_status)
+- [x] Queue method to get pending contact UIDs
+- [x] Transport `/ping` endpoint for connectivity checks
+- [x] Transport `/message` endpoint with flexible message types
+- [x] Transport client methods: `send_ping()`, `send_message()`
 
 ### Current Limitations
 
@@ -54,10 +60,18 @@ Focus: Storage, encryption, and rich messages.
   - [x] Foundation: AppState, Contact, Chat, Settings structures (on `dev`)
   - [x] Contact token generation/parsing (on `dev`)
   - [x] Message queue with startup retry (on `dev`)
+  - [x] Chat pending message tracking (on `dev`)
   - [ ] SQLite integration for contacts and chats
   - [ ] Message history persistence
   - [ ] Search and filtering
   - [ ] Export/import functionality
+
+- [ ] **Enhanced Transport**
+  - [x] `/ping` endpoint for connectivity checks (on `dev`)
+  - [x] `/message` endpoint with flexible message types (on `dev`)
+  - [x] Client methods for ping and message sending (on `dev`)
+  - [ ] Message type handlers (text, delete, typing indicators)
+  - [ ] Integration with AppState for automatic message storage
 
 - [ ] **End-to-End Encryption**
   - X25519 key exchange + ChaCha20-Poly1305
