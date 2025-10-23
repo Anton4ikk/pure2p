@@ -68,16 +68,22 @@ cargo clippy -- -D warnings    # Fail on warnings
 - Peer management (add, remove, get, list)
 - Delivery state tracking (Success, Queued, Retry, Failed)
 
-**`storage`** - Local persistence (STUB)
-- SQLite-based message and peer storage
+**`storage`** - Local persistence (FOUNDATION STRUCTURES - `dev` branch)
+- Contact management structures with expiry and active status tracking
+- Contact token generation/parsing (base64-encoded CBOR)
+- Chat conversation structures with message history
+- Application state persistence (JSON/CBOR serialization)
+- Global settings management
 - No sync, no cloud backups - intentionally local-only
-- Full implementation planned for [v0.2](ROADMAP.md#-version-02---enhanced-core-q2-2025)
+- **Status**: Data structures complete, SQLite integration in progress for [v0.2](ROADMAP.md#-version-02---enhanced-core-q2-2025)
 
-**`queue`** - Message retry logic (IMPLEMENTED)
+**`queue`** - Message retry logic (ENHANCED - `dev` branch)
 - SQLite-backed persistent message queue
 - Priority-based ordering (Urgent > High > Normal > Low)
 - Exponential backoff for failed deliveries (base_delay * 2^attempts)
 - Configurable max retries and base delay
+- **New**: Startup retry - automatically resends all pending messages when app launches
+- **New**: Enhanced schema with message_type, target_uid, and retry_count tracking
 
 ### Data Flow
 
@@ -91,13 +97,49 @@ Sender Client                    Recipient Client
    [Storage] ← (retry if failed)     [UI]
 ```
 
+### Storage Structures
+
+**`Contact`** - Peer information with expiry
+- `uid`: Unique identifier (derived from public key)
+- `ip`: IP address and port (e.g., "192.168.1.100:8080")
+- `pubkey`: Ed25519 public key bytes
+- `expiry`: Expiration timestamp
+- `is_active`: Contact active status
+- Methods: `is_expired()`, `activate()`, `deactivate()`
+
+**`Chat`** - Conversation with a contact
+- `contact_uid`: UID of the peer
+- `messages`: Vector of Message objects
+- `is_active`: Unread status indicator
+- Methods: `append_message()`, `mark_unread()`, `mark_read()`
+
+**`AppState`** - Global application state
+- `contacts`: List of Contact objects
+- `chats`: List of Chat objects
+- `message_queue`: Message IDs awaiting delivery
+- `settings`: Application settings
+- Supports JSON and CBOR serialization
+- Methods: `save()`, `load()`, `save_cbor()`, `load_cbor()`
+
+**`Settings`** - Configurable parameters
+- `default_contact_expiry_days`: Contact token validity (default 30)
+- `max_message_retries`: Retry limit (default 5)
+- `retry_base_delay_ms`: Initial retry delay (default 1000)
+- `global_retry_interval_ms`: Periodic retry interval (default 600,000 = 10 min)
+- `enable_notifications`: Notification toggle
+
+**Contact Tokens**
+- `generate_contact_token(ip, pubkey, expiry)`: Creates base64-encoded CBOR token
+- `parse_contact_token(token)`: Decodes token and validates expiry
+- Used for manual peer exchange and identity sharing
+
 ### Error Handling
 
 All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 - `Crypto(String)`: Cryptographic failures
 - `JsonSerialization` / `CborSerialization`: Encoding issues
 - `Transport(String)`: Network errors
-- `Storage(String)`: Database failures
+- `Storage(String)`: Database failures, invalid tokens, expired contacts
 - `Queue(String)`: Message queue issues
 - `Io`: Standard I/O errors
 
@@ -128,10 +170,24 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 ### Queue (`queue.rs`)
 
 - SQLite schema with indexed priority and retry time
-- `enqueue()`, `fetch_pending()`, `mark_delivered()`, `mark_failed()`
+- Enhanced schema: `message_id`, `target_uid`, `message_type`, `payload`, `retry_count`, `last_attempt`
+- `enqueue()`, `enqueue_with_type()`, `fetch_pending()`, `fetch_all_pending()`, `dequeue()`
+- `mark_delivered()`, `mark_failed()`, `retry_pending_on_startup()`
 - Default: 5 max retries, 1000ms base delay
 - Exponential backoff: delay = base_delay * 2^attempts
 - Messages auto-removed after max retries exceeded
+- **Startup retry**: On app launch, `retry_pending_on_startup()` attempts delivery of all queued messages
+
+### Storage (`storage.rs`)
+
+- Contact token system for easy peer exchange
+- Base64-encoded CBOR tokens containing: IP, public key, expiry
+- `Contact` struct tracks peer status and expiry
+- `Chat` struct manages conversation history per contact
+- `AppState` provides unified state management with JSON/CBOR persistence
+- `Settings` allows runtime configuration updates
+- Active/inactive status tracking for contacts and chats
+- Expiry validation prevents use of outdated contact information
 
 ### CLI Client (`src/bin/cli.rs`)
 
@@ -181,6 +237,8 @@ Your identity:
 Key crates:
 - `ed25519-dalek`, `x25519-dalek`, `ring`: Cryptography
 - `serde`, `serde_json`, `serde_cbor`: Serialization
+- `base64`: Contact token encoding
+- `chrono`: Timestamp and expiry management
 - `tokio`: Async runtime
 - `hyper`, `hyper-util`: HTTP transport
 - `rusqlite`: SQLite storage
