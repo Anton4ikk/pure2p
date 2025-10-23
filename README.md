@@ -64,21 +64,26 @@ cargo run --bin pure2p-cli
 
 ### Architecture
 
-```
-Sender                    Recipient
-┌──────┐                 ┌──────┐
-│ App  │                 │ App  │
-└──┬───┘                 └───┬──┘
-   │                         │
-┌──▼────────┐         ┌─────▼───────┐
-│  Queue    │         │POST /output │
-│(SQLite)   │         │   Server    │
-└──┬────────┘         └─────▲───────┘
-   │                         │
-┌──▼──────────────────────────┐
-│  HTTP POST /output          │
-│  (CBOR message envelope)    │
-└─────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Sender["Sender Client"]
+        A1[App]
+        A2[Queue<br/>SQLite]
+    end
+
+    subgraph Recipient["Recipient Client"]
+        B1[App]
+        B2[POST /output<br/>Server]
+    end
+
+    A1 -->|Outgoing Message| A2
+    A2 -->|HTTP POST /output<br/>CBOR envelope| B2
+    B2 -->|Delivered| B1
+
+    style A1 fill:#e1f5ff
+    style A2 fill:#fff4e1
+    style B1 fill:#e1f5ff
+    style B2 fill:#e1ffe1
 ```
 
 ### Message Flow
@@ -113,16 +118,34 @@ Sender                    Recipient
 
 ### Architecture
 
-```
-┌─────────────────────────┐
-│  Platform-Native UI     │  Swift, Kotlin, Tauri
-├─────────────────────────┤
-│  FFI Bridge (cdylib)    │  C-compatible interface
-├─────────────────────────┤
-│  Pure2P Rust Core       │  90%+ shared code
-│  crypto · protocol      │
-│  transport · queue      │
-└─────────────────────────┘
+```mermaid
+graph TB
+    subgraph UI["Platform-Native UI"]
+        direction LR
+        Swift["Swift (iOS)"]
+        Kotlin["Kotlin (Android)"]
+        Tauri["Tauri (Desktop)"]
+    end
+
+    subgraph FFI["FFI Bridge (cdylib)"]
+        direction LR
+        CCompat["C-compatible interface"]
+    end
+
+    subgraph Core["Pure2P Rust Core (90%+ shared code)"]
+        direction LR
+        Crypto[crypto]
+        Protocol[protocol]
+        Transport[transport]
+        Queue[queue]
+    end
+
+    UI --> FFI
+    FFI --> Core
+
+    style UI fill:#e1f5ff
+    style FFI fill:#fff4e1
+    style Core fill:#e1ffe1
 ```
 
 **Planned:**
