@@ -9,13 +9,26 @@
 use crate::crypto::UID;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Protocol version
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Message type enumeration
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MessageType {
+    /// Regular text message
+    Text,
+    /// Delete chat message
+    Delete,
+}
+
 /// Message envelope that wraps all P2P communications
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageEnvelope {
+    /// Unique message identifier
+    pub id: Uuid,
+
     /// Protocol version for compatibility checking
     pub version: u8,
 
@@ -28,20 +41,35 @@ pub struct MessageEnvelope {
     /// Unix timestamp in milliseconds
     pub timestamp: i64,
 
+    /// Message type (Text/Delete)
+    pub message_type: MessageType,
+
     /// Message payload (encrypted or plaintext)
     pub payload: Vec<u8>,
 }
 
 impl MessageEnvelope {
-    /// Create a new message envelope
-    pub fn new(from_uid: &UID, to_uid: &UID, payload: Vec<u8>) -> Self {
+    /// Create a new message envelope with specified message type
+    pub fn new(from_uid: &UID, to_uid: &UID, message_type: MessageType, payload: Vec<u8>) -> Self {
         Self {
+            id: Uuid::new_v4(),
             version: PROTOCOL_VERSION,
             from_uid: from_uid.as_str().to_string(),
             to_uid: to_uid.as_str().to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
+            message_type,
             payload,
         }
+    }
+
+    /// Create a new text message envelope (convenience method)
+    pub fn new_text(from_uid: &UID, to_uid: &UID, payload: Vec<u8>) -> Self {
+        Self::new(from_uid, to_uid, MessageType::Text, payload)
+    }
+
+    /// Create a new delete message envelope (convenience method)
+    pub fn new_delete(from_uid: &UID, to_uid: &UID, payload: Vec<u8>) -> Self {
+        Self::new(from_uid, to_uid, MessageType::Delete, payload)
     }
 
     /// Encode the message envelope to CBOR format
@@ -93,13 +121,35 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Hello, Pure2P!".to_vec();
 
-        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload.clone());
+        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload.clone());
 
         assert_eq!(envelope.version, PROTOCOL_VERSION);
         assert_eq!(envelope.from_uid, sender.uid().as_str());
         assert_eq!(envelope.to_uid, recipient.uid().as_str());
         assert_eq!(envelope.payload, payload);
+        assert_eq!(envelope.message_type, MessageType::Text);
         assert!(envelope.timestamp > 0);
+        assert!(!envelope.id.is_nil());
+    }
+
+    #[test]
+    fn test_message_envelope_with_type() {
+        let sender = KeyPair::generate().expect("Failed to generate sender keypair");
+        let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
+        let payload = b"Delete request".to_vec();
+
+        // Test Text type
+        let text_envelope = MessageEnvelope::new_text(sender.uid(), recipient.uid(), payload.clone());
+        assert_eq!(text_envelope.message_type, MessageType::Text);
+        assert!(!text_envelope.id.is_nil());
+
+        // Test Delete type
+        let delete_envelope = MessageEnvelope::new_delete(sender.uid(), recipient.uid(), payload.clone());
+        assert_eq!(delete_envelope.message_type, MessageType::Delete);
+        assert!(!delete_envelope.id.is_nil());
+
+        // IDs should be different
+        assert_ne!(text_envelope.id, delete_envelope.id);
     }
 
     #[test]
@@ -108,7 +158,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Test message for CBOR encoding".to_vec();
 
-        let original = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let original = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         // Encode to CBOR
         let encoded = original.to_cbor().expect("Failed to encode to CBOR");
@@ -119,10 +169,12 @@ mod tests {
             .expect("Failed to decode from CBOR");
 
         // Verify roundtrip
+        assert_eq!(decoded.id, original.id);
         assert_eq!(decoded.version, original.version);
         assert_eq!(decoded.from_uid, original.from_uid);
         assert_eq!(decoded.to_uid, original.to_uid);
         assert_eq!(decoded.timestamp, original.timestamp);
+        assert_eq!(decoded.message_type, original.message_type);
         assert_eq!(decoded.payload, original.payload);
         assert_eq!(decoded, original);
     }
@@ -133,7 +185,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Test message for JSON encoding".to_vec();
 
-        let original = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let original = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         // Encode to JSON
         let encoded = original.to_json().expect("Failed to encode to JSON");
@@ -153,16 +205,18 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Human readable message".to_vec();
 
-        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         let json_string = envelope.to_json_string()
             .expect("Failed to encode to JSON string");
 
         // Should be valid JSON
+        assert!(json_string.contains("id"));
         assert!(json_string.contains("version"));
         assert!(json_string.contains("from_uid"));
         assert!(json_string.contains("to_uid"));
         assert!(json_string.contains("timestamp"));
+        assert!(json_string.contains("message_type"));
         assert!(json_string.contains("payload"));
 
         // Should be able to parse back
@@ -177,7 +231,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Version test".to_vec();
 
-        let mut envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let mut envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         // Current version should be compatible
         assert!(envelope.is_version_compatible());
@@ -197,7 +251,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Age test".to_vec();
 
-        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         // Age should be very small (just created)
         let age = envelope.age_ms();
@@ -218,7 +272,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = vec![0u8; 100]; // 100 bytes of data
 
-        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         let cbor_encoded = envelope.to_cbor().expect("Failed to encode to CBOR");
         let json_encoded = envelope.to_json().expect("Failed to encode to JSON");
@@ -243,7 +297,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = Vec::new();
 
-        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload);
+        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload);
 
         // Should handle empty payload
         assert!(envelope.payload.is_empty());
@@ -263,7 +317,7 @@ mod tests {
         let recipient = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = vec![0x42u8; 10_000]; // 10KB payload
 
-        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), payload.clone());
+        let envelope = MessageEnvelope::new(sender.uid(), recipient.uid(), MessageType::Text, payload.clone());
 
         // CBOR roundtrip
         let cbor_encoded = envelope.to_cbor().expect("Failed to encode to CBOR");

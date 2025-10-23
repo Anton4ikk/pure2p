@@ -55,11 +55,13 @@ cargo clippy -- -D warnings    # Fail on warnings
 - `UID`: Unique identifier derived from SHA-256 hash of public key (first 16 bytes as hex)
 - Sign/verify operations using `ed25519-dalek`
 
-**`protocol`** - Message envelope and serialization (IMPLEMENTED)
-- `MessageEnvelope`: Contains `version`, `from_uid`, `to_uid`, `timestamp`, `payload`
+**`protocol`** - Message envelope and serialization (ENHANCED)
+- `MessageEnvelope`: Contains `id` (UUID), `version`, `from_uid`, `to_uid`, `timestamp`, `message_type`, `payload`
+- `MessageType` enum: Text, Delete (extensible for future types)
 - CBOR serialization for compact binary (production)
 - JSON serialization for debugging/inspection
 - Version compatibility checking
+- Convenience constructors: `new_text()`, `new_delete()`
 
 **`transport`** - Network layer (ENHANCED - `dev` branch)
 - HTTP/1.1 server with multiple endpoints:
@@ -93,17 +95,50 @@ cargo clippy -- -D warnings    # Fail on warnings
 - **New**: Enhanced schema with message_type, target_uid, and retry_count tracking
 - **New**: `get_pending_contact_uids()` for syncing pending message flags with chats
 
+**`messaging`** - High-level messaging API (ENHANCED - `dev` branch)
+- User-facing message sending with automatic retry queueing
+- Chat lifecycle management (create from ping, active/inactive states)
+- Delete chat propagation with smart logic (inactive=immediate, active=notify+delete)
+- **New**: Incoming message handling with automatic chat creation
+- **Functions**:
+  - `send_message()` - Send with auto-queue on failure
+  - `send_message_with_type()` - Send with custom message type
+  - `send_delete_chat()` - Send delete notification
+  - `handle_delete_chat()` - Process incoming delete requests
+  - `handle_incoming_message()` - Process received messages (create chat if needed, append to history, mark unread)
+  - `create_chat_from_ping()` - Create chat based on ping success/failure
+  - `create_active_chat()` / `create_inactive_chat()` - Direct chat creation
+  - `delete_chat()` - Smart deletion (checks is_active flag)
+  - `delete_inactive_chat_immediate()` - Force immediate delete
+  - `delete_active_chat_with_notification()` - Force notification send
+
 ### Data Flow
 
 ```
-Sender Client                    Recipient Client
-─────────────                    ─────────────
-[UI] → [Queue]                   [POST /output] ← HTTP/2
-         ↓                              ↓
-   [Transport] ─── POST /output ───→ [Storage]
-         ↓                              ↓
-   [Storage] ← (retry if failed)     [UI]
+Sender Client                           Recipient Client
+─────────────                           ─────────────
+[UI/App]                                [POST /message] ← HTTP/1.1
+    ↓                                          ↓
+[Messaging API]                         [NewMessageHandler]
+    ↓                                          ↓
+Try send via Transport ────────────→    [AppState/Chat]
+    ↓         (CBOR/HTTP)                     ↓
+Success? Yes → Done                          [UI]
+    ↓
+    No → [Queue]
+         (SQLite)
+           ↓
+    [Retry with backoff]
+           ↓
+    Try send again...
 ```
+
+**Message Types Supported:**
+- `text` - Regular text messages
+- `delete_chat` - Chat deletion notifications
+- `typing` - Typing indicators (future)
+- `read_receipt` - Read receipts (future)
+- Custom types for extensibility
 
 ### Storage Structures
 
@@ -118,8 +153,9 @@ Sender Client                    Recipient Client
 **`Chat`** - Conversation with a contact
 - `contact_uid`: UID of the peer
 - `messages`: Vector of Message objects
-- `is_active`: Unread status indicator
-- Methods: `append_message()`, `mark_unread()`, `mark_read()`
+- `is_active`: Online/reachable status (true = online, false = offline)
+- `has_pending_messages`: Flag for queued outgoing messages
+- Methods: `append_message()`, `mark_unread()`, `mark_read()`, `mark_has_pending()`, `mark_no_pending()`
 
 **`AppState`** - Global application state
 - `contacts`: List of Contact objects
@@ -177,9 +213,12 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 ### Protocol (`protocol.rs`)
 
 - Protocol version is currently `1`
+- Message IDs are UUID v4 (`uuid::Uuid::new_v4()`)
 - Timestamps are Unix milliseconds (`chrono::Utc::now().timestamp_millis()`)
+- `MessageType` enum distinguishes between Text and Delete messages (extensible)
 - CBOR is typically more compact than JSON - use CBOR for production transport
 - Both serialization formats support full roundtrip without data loss
+- Use `new_text()` or `new_delete()` convenience methods for common message types
 
 ### Transport (`transport.rs`)
 
@@ -217,7 +256,7 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 - `Chat` struct manages conversation history per contact
   - `has_pending_messages` flag for UI notification badges
   - `mark_has_pending()` / `mark_no_pending()` methods
-  - `is_active` for unread status
+  - `is_active` for online/offline status (managed by ping)
 - `AppState` provides unified state management with JSON/CBOR persistence
   - `sync_pending_status(pending_uids)` - Updates chat pending flags from queue
   - `get_chat(uid)` / `get_chat_mut(uid)` - Retrieve chat by contact UID
@@ -226,6 +265,46 @@ All operations return `Result<T>` with the `Error` enum from `lib.rs`:
 - `Settings` allows runtime configuration updates
 - Active/inactive status tracking for contacts and chats
 - Expiry validation prevents use of outdated contact information
+
+### Messaging (`messaging.rs`)
+
+High-level API combining transport, queue, and storage for user-facing operations.
+
+**Message Sending:**
+- `send_message(transport, queue, contact, message, priority)` - Send with automatic queueing on failure
+- `send_message_with_type()` - Send with custom message type (text, delete_chat, typing, etc.)
+- Returns `true` if delivered immediately, `false` if queued for retry
+- Failed messages automatically queued with specified priority
+
+**Chat Lifecycle:**
+- `create_chat_from_ping(transport, app_state, contact)` - Ping contact and create chat
+  - Success: Creates active chat (contact is online)
+  - Failure: Creates inactive chat (contact is offline)
+- `create_active_chat(app_state, contact_uid)` - Create/activate chat without ping
+- `create_inactive_chat(app_state, contact_uid)` - Create/deactivate chat without ping
+- Chat state managed via `is_active` flag
+
+**Chat Deletion:**
+- `delete_chat(transport, queue, app_state, contact, local_uid)` - Smart deletion
+  - Inactive chat: Delete immediately without notification
+  - Active chat: Send delete_chat message, then delete locally
+- `delete_inactive_chat_immediate(app_state, contact_uid)` - Force immediate delete (errors if active)
+- `delete_active_chat_with_notification()` - Force notification send regardless of state
+- `handle_delete_chat(app_state, sender_uid)` - Process incoming delete request
+
+**Incoming Message Handling:**
+- `handle_incoming_message(app_state, sender_uid, recipient_uid, message_id, content, timestamp)` - Process received messages
+  - Automatically creates chat if not found using `get_or_create_chat()`
+  - Appends message to chat history
+  - Marks chat as unread (`is_active = true`) for TUI display
+  - Logs message receipt for debugging
+
+**Design Principles:**
+- Automatic retry handling - transparent to caller
+- Priority support for urgent messages (delete_chat uses Urgent)
+- State preservation - messages/flags maintained during lifecycle changes
+- Extensible message types for future features
+- Automatic chat creation on first message from unknown peer
 
 ### CLI Client (`src/bin/cli.rs`)
 

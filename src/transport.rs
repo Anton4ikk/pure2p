@@ -761,7 +761,7 @@ mod tests {
         let keypair = KeyPair::generate().expect("Failed to generate keypair");
         let recipient_keypair = KeyPair::generate().expect("Failed to generate recipient keypair");
 
-        let envelope = MessageEnvelope::new(&keypair.uid, &recipient_keypair.uid, b"test message".to_vec());
+        let envelope = MessageEnvelope::new_text(&keypair.uid, &recipient_keypair.uid, b"test message".to_vec());
 
         // Send a message to the transport
         let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
@@ -793,7 +793,7 @@ mod tests {
         let keypair = KeyPair::generate().expect("Failed to generate keypair");
         let recipient_keypair = KeyPair::generate().expect("Failed to generate recipient keypair");
 
-        let envelope = MessageEnvelope::new(&keypair.uid, &recipient_keypair.uid, b"test".to_vec());
+        let envelope = MessageEnvelope::new_text(&keypair.uid, &recipient_keypair.uid, b"test".to_vec());
 
         // Try to send to a peer that doesn't exist
         let result = transport.send("127.0.0.1:9999", &envelope).await;
@@ -889,7 +889,7 @@ mod tests {
         let recipient_keypair = KeyPair::generate().expect("Failed to generate recipient keypair");
         let payload = b"Hello, peer!".to_vec();
 
-        let envelope = MessageEnvelope::new(&sender_keypair.uid, &recipient_keypair.uid, payload.clone());
+        let envelope = MessageEnvelope::new_text(&sender_keypair.uid, &recipient_keypair.uid, payload.clone());
 
         let result = sender_transport
             .send(&receiver_local_addr.to_string(), &envelope)

@@ -191,10 +191,11 @@ pure2p/
 ├── src/
 │   ├── lib.rs          # Library entry point and error types
 │   ├── crypto.rs       # Cryptographic operations (Ed25519, UIDs)
-│   ├── protocol.rs     # MessageEnvelope, CBOR/JSON serialization
+│   ├── protocol.rs     # MessageEnvelope (with UUID, MessageType), CBOR/JSON serialization
 │   ├── transport.rs    # HTTP/1.1 server/client, POST /output endpoint
 │   ├── storage.rs      # Contact management, chat structures, AppState persistence
 │   ├── queue.rs        # SQLite message queue with exponential backoff and startup retry
+│   ├── messaging.rs    # High-level messaging API with incoming message handling
 │   └── bin/
 │       └── cli.rs      # Command-line client (netcat-style)
 ├── Cargo.toml          # Project dependencies and metadata

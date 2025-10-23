@@ -35,6 +35,16 @@ Foundational P2P messaging with command-line interface.
 - [x] Transport `/ping` endpoint for connectivity checks
 - [x] Transport `/message` endpoint with flexible message types
 - [x] Transport client methods: `send_ping()`, `send_message()`
+- [x] **Messaging module** - High-level API combining transport + queue + storage
+  - [x] Message sending with automatic retry queueing
+  - [x] Chat lifecycle management (ping-based creation, active/inactive states)
+  - [x] Delete chat propagation (smart deletion based on online status)
+  - [x] Extensible message type support (text, delete_chat, typing, etc.)
+  - [x] Incoming message handling (`handle_incoming_message()`) with auto-chat creation
+- [x] **Enhanced MessageEnvelope** with UUID and MessageType enum
+  - [x] Unique message IDs (UUID v4)
+  - [x] MessageType enum (Text, Delete) for extensible message types
+  - [x] Convenience constructors (`new_text()`, `new_delete()`)
 
 ### Current Limitations
 
@@ -66,12 +76,15 @@ Focus: Storage, encryption, and rich messages.
   - [ ] Search and filtering
   - [ ] Export/import functionality
 
-- [ ] **Enhanced Transport**
+- [ ] **Enhanced Transport & Messaging**
   - [x] `/ping` endpoint for connectivity checks (on `dev`)
   - [x] `/message` endpoint with flexible message types (on `dev`)
   - [x] Client methods for ping and message sending (on `dev`)
-  - [ ] Message type handlers (text, delete, typing indicators)
-  - [ ] Integration with AppState for automatic message storage
+  - [x] High-level messaging API with auto-retry (on `dev`)
+  - [x] Chat lifecycle (ping-based creation, active/inactive) (on `dev`)
+  - [x] Delete chat propagation (on `dev`)
+  - [ ] Message type handlers (typing indicators, read receipts)
+  - [ ] Integration with persistent storage (SQLite)
 
 - [ ] **End-to-End Encryption**
   - X25519 key exchange + ChaCha20-Poly1305
