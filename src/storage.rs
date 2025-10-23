@@ -199,6 +199,24 @@ impl Chat {
 }
 
 /// Application settings
+///
+/// Persistent configuration for the Pure2P application.
+/// Settings are stored in JSON format and can be loaded/saved from disk.
+///
+/// # Example
+/// ```rust,no_run
+/// use pure2p::storage::Settings;
+///
+/// // Load settings (returns default if file doesn't exist)
+/// let mut settings = Settings::load("settings.json").expect("Failed to load");
+///
+/// // Update retry interval and auto-save
+/// settings.update_retry_interval(15, "settings.json").expect("Failed to update");
+///
+/// // Access values
+/// println!("Retry interval: {} minutes", settings.get_retry_interval_minutes());
+/// println!("Storage path: {}", settings.storage_path);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Default contact expiry duration in days
@@ -213,17 +231,104 @@ pub struct Settings {
     pub enable_notifications: bool,
     /// Global retry interval in milliseconds (default 10 minutes)
     pub global_retry_interval_ms: u64,
+    /// Retry interval in minutes (user-facing, converts to/from global_retry_interval_ms)
+    pub retry_interval_minutes: u32,
+    /// Storage path for application data
+    pub storage_path: String,
 }
 
 impl Settings {
-    /// Update the global retry interval at runtime
+    /// Load settings from a JSON file
+    ///
+    /// # Arguments
+    /// * `path` - Path to the settings file
+    ///
+    /// # Returns
+    /// The loaded settings, or default settings if file doesn't exist
+    pub fn load<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref();
+
+        if !path.exists() {
+            // Return default settings if file doesn't exist
+            return Ok(Self::default());
+        }
+
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| Error::Storage(format!("Failed to read settings: {}", e)))?;
+
+        // Handle empty file (return defaults)
+        if data.trim().is_empty() {
+            return Ok(Self::default());
+        }
+
+        let mut settings: Self = serde_json::from_str(&data)
+            .map_err(|e| Error::Storage(format!("Failed to parse settings: {}", e)))?;
+
+        // Ensure milliseconds and minutes are in sync
+        settings.sync_retry_interval();
+
+        Ok(settings)
+    }
+
+    /// Save settings to a JSON file
+    ///
+    /// # Arguments
+    /// * `path` - Path to save the settings file
+    ///
+    /// # Returns
+    /// Result indicating success or failure
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
+        let path = path.as_ref();
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::Storage(format!("Failed to create settings directory: {}", e)))?;
+        }
+
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| Error::Storage(format!("Failed to serialize settings: {}", e)))?;
+
+        std::fs::write(path, json)
+            .map_err(|e| Error::Storage(format!("Failed to write settings: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Update the retry interval in minutes and auto-save
+    ///
+    /// # Arguments
+    /// * `minutes` - Retry interval in minutes
+    /// * `save_path` - Path to save the updated settings
+    ///
+    /// # Returns
+    /// Result indicating success or failure
+    pub fn update_retry_interval<P: AsRef<std::path::Path>>(&mut self, minutes: u32, save_path: P) -> Result<()> {
+        self.retry_interval_minutes = minutes;
+        self.global_retry_interval_ms = (minutes as u64) * 60 * 1000; // Convert minutes to milliseconds
+        self.save(save_path)
+    }
+
+    /// Update the global retry interval at runtime (in milliseconds)
     pub fn set_global_retry_interval_ms(&mut self, interval_ms: u64) {
         self.global_retry_interval_ms = interval_ms;
+        self.retry_interval_minutes = (interval_ms / (60 * 1000)) as u32;
     }
 
     /// Get the global retry interval in milliseconds
     pub fn get_global_retry_interval_ms(&self) -> u64 {
         self.global_retry_interval_ms
+    }
+
+    /// Get the retry interval in minutes
+    pub fn get_retry_interval_minutes(&self) -> u32 {
+        self.retry_interval_minutes
+    }
+
+    /// Synchronize retry interval values (ensure minutes and milliseconds match)
+    fn sync_retry_interval(&mut self) {
+        // Prefer milliseconds value as source of truth
+        self.retry_interval_minutes = (self.global_retry_interval_ms / (60 * 1000)) as u32;
     }
 }
 
@@ -236,7 +341,182 @@ impl Default for Settings {
             retry_base_delay_ms: 1000,
             enable_notifications: true,
             global_retry_interval_ms: 600_000, // 10 minutes = 600,000 ms
+            retry_interval_minutes: 10, // 10 minutes
+            storage_path: "./data".to_string(), // Default storage path
         }
+    }
+}
+
+/// Thread-safe settings manager for UI layer access
+///
+/// Provides shared access to application settings with automatic persistence.
+/// Designed for use with TUI/GUI layers that need concurrent access.
+///
+/// # Example
+/// ```rust,no_run
+/// use pure2p::storage::SettingsManager;
+/// use std::sync::Arc;
+///
+/// # async fn example() -> pure2p::Result<()> {
+/// // Create shared settings manager
+/// let manager = SettingsManager::new("settings.json").await?;
+///
+/// // Read settings
+/// let retry_interval = manager.get_retry_interval_minutes().await;
+/// println!("Retry interval: {} minutes", retry_interval);
+///
+/// // Update settings (auto-saves)
+/// manager.set_retry_interval_minutes(15).await?;
+///
+/// // Share with UI thread
+/// let ui_manager = manager.clone();
+/// tokio::spawn(async move {
+///     let path = ui_manager.get_storage_path().await;
+///     println!("Storage: {}", path);
+/// });
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct SettingsManager {
+    /// Shared settings state
+    settings: std::sync::Arc<tokio::sync::RwLock<Settings>>,
+    /// Path to settings file for auto-save
+    settings_path: std::sync::Arc<String>,
+}
+
+impl SettingsManager {
+    /// Create a new settings manager
+    ///
+    /// Loads settings from the specified path, or creates default settings if the file doesn't exist.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the settings file
+    ///
+    /// # Returns
+    /// A new SettingsManager instance
+    pub async fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        let settings = Settings::load(&path)?;
+
+        Ok(Self {
+            settings: std::sync::Arc::new(tokio::sync::RwLock::new(settings)),
+            settings_path: std::sync::Arc::new(path_str),
+        })
+    }
+
+    /// Get the current retry interval in minutes
+    pub async fn get_retry_interval_minutes(&self) -> u32 {
+        let settings = self.settings.read().await;
+        settings.retry_interval_minutes
+    }
+
+    /// Set the retry interval in minutes and auto-save
+    ///
+    /// # Arguments
+    /// * `minutes` - Retry interval in minutes
+    ///
+    /// # Returns
+    /// Result indicating success or failure
+    pub async fn set_retry_interval_minutes(&self, minutes: u32) -> Result<()> {
+        let mut settings = self.settings.write().await;
+        settings.update_retry_interval(minutes, self.settings_path.as_str())
+    }
+
+    /// Get the storage path
+    pub async fn get_storage_path(&self) -> String {
+        let settings = self.settings.read().await;
+        settings.storage_path.clone()
+    }
+
+    /// Set the storage path and auto-save
+    ///
+    /// # Arguments
+    /// * `path` - New storage path
+    ///
+    /// # Returns
+    /// Result indicating success or failure
+    pub async fn set_storage_path(&self, path: String) -> Result<()> {
+        let mut settings = self.settings.write().await;
+        settings.storage_path = path;
+        settings.save(self.settings_path.as_str())
+    }
+
+    /// Get the maximum message retry count
+    pub async fn get_max_message_retries(&self) -> u32 {
+        let settings = self.settings.read().await;
+        settings.max_message_retries
+    }
+
+    /// Set the maximum message retry count and auto-save
+    pub async fn set_max_message_retries(&self, retries: u32) -> Result<()> {
+        let mut settings = self.settings.write().await;
+        settings.max_message_retries = retries;
+        settings.save(self.settings_path.as_str())
+    }
+
+    /// Get whether notifications are enabled
+    pub async fn get_notifications_enabled(&self) -> bool {
+        let settings = self.settings.read().await;
+        settings.enable_notifications
+    }
+
+    /// Set whether notifications are enabled and auto-save
+    pub async fn set_notifications_enabled(&self, enabled: bool) -> Result<()> {
+        let mut settings = self.settings.write().await;
+        settings.enable_notifications = enabled;
+        settings.save(self.settings_path.as_str())
+    }
+
+    /// Get the default contact expiry in days
+    pub async fn get_default_contact_expiry_days(&self) -> u32 {
+        let settings = self.settings.read().await;
+        settings.default_contact_expiry_days
+    }
+
+    /// Set the default contact expiry in days and auto-save
+    pub async fn set_default_contact_expiry_days(&self, days: u32) -> Result<()> {
+        let mut settings = self.settings.write().await;
+        settings.default_contact_expiry_days = days;
+        settings.save(self.settings_path.as_str())
+    }
+
+    /// Get a clone of all settings (for reading multiple values at once)
+    pub async fn get_all(&self) -> Settings {
+        let settings = self.settings.read().await;
+        settings.clone()
+    }
+
+    /// Update multiple settings at once and auto-save
+    ///
+    /// # Arguments
+    /// * `update_fn` - Function that modifies the settings
+    ///
+    /// # Returns
+    /// Result indicating success or failure
+    pub async fn update<F>(&self, update_fn: F) -> Result<()>
+    where
+        F: FnOnce(&mut Settings),
+    {
+        let mut settings = self.settings.write().await;
+        update_fn(&mut settings);
+        settings.save(self.settings_path.as_str())
+    }
+
+    /// Reload settings from disk
+    ///
+    /// Useful for syncing with external changes to the settings file.
+    pub async fn reload(&self) -> Result<()> {
+        let loaded = Settings::load(self.settings_path.as_str())?;
+        let mut settings = self.settings.write().await;
+        *settings = loaded;
+        Ok(())
+    }
+
+    /// Save current settings to disk
+    pub async fn save(&self) -> Result<()> {
+        let settings = self.settings.read().await;
+        settings.save(self.settings_path.as_str())
     }
 }
 
@@ -424,13 +704,13 @@ impl Default for AppState {
 
 /// Local storage manager
 pub struct Storage {
-    conn: Option<Connection>,
+    _conn: Option<Connection>,
 }
 
 impl Storage {
     /// Create a new storage instance
     pub fn new() -> Self {
-        Self { conn: None }
+        Self { _conn: None }
     }
 
     /// Initialize storage with a database file
@@ -499,7 +779,7 @@ mod tests {
     #[test]
     fn test_storage_creation() {
         let storage = Storage::new();
-        assert!(storage.conn.is_none());
+        assert!(storage._conn.is_none());
     }
 
     #[test]
@@ -884,6 +1164,8 @@ mod tests {
         assert_eq!(settings.retry_base_delay_ms, 1000);
         assert!(settings.enable_notifications);
         assert_eq!(settings.global_retry_interval_ms, 600_000); // 10 minutes
+        assert_eq!(settings.retry_interval_minutes, 10);
+        assert_eq!(settings.storage_path, "./data");
     }
 
     #[test]
@@ -1324,5 +1606,406 @@ mod tests {
         assert!(loaded.is_active);
         assert!(loaded.has_pending_messages);
         assert_eq!(loaded.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_settings_save_and_load() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create and save settings
+        let mut settings = Settings::default();
+        settings.retry_interval_minutes = 15;
+        settings.global_retry_interval_ms = 15 * 60 * 1000; // Keep in sync
+        settings.storage_path = "/custom/path".to_string();
+
+        settings.save(path).expect("Failed to save settings");
+
+        // Load settings
+        let loaded = Settings::load(path).expect("Failed to load settings");
+
+        assert_eq!(loaded.retry_interval_minutes, 15);
+        assert_eq!(loaded.global_retry_interval_ms, 15 * 60 * 1000);
+        assert_eq!(loaded.storage_path, "/custom/path");
+        assert_eq!(loaded.default_contact_expiry_days, 30);
+    }
+
+    #[test]
+    fn test_settings_load_nonexistent() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let path = temp_dir.path().join("nonexistent.json");
+
+        // Load from nonexistent file should return defaults
+        let settings = Settings::load(&path).expect("Failed to load settings");
+
+        assert_eq!(settings.retry_interval_minutes, 10);
+        assert_eq!(settings.storage_path, "./data");
+    }
+
+    #[test]
+    fn test_settings_load_empty_file() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // File exists but is empty - should return defaults
+        let settings = Settings::load(path).expect("Failed to load settings");
+
+        assert_eq!(settings.retry_interval_minutes, 10);
+        assert_eq!(settings.storage_path, "./data");
+        assert_eq!(settings.max_message_retries, 5);
+    }
+
+    #[test]
+    fn test_settings_update_retry_interval() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create settings and update retry interval
+        let mut settings = Settings::default();
+        settings.update_retry_interval(20, path).expect("Failed to update");
+
+        // Verify values are updated
+        assert_eq!(settings.retry_interval_minutes, 20);
+        assert_eq!(settings.global_retry_interval_ms, 20 * 60 * 1000);
+
+        // Verify auto-save worked
+        let loaded = Settings::load(path).expect("Failed to load");
+        assert_eq!(loaded.retry_interval_minutes, 20);
+        assert_eq!(loaded.global_retry_interval_ms, 20 * 60 * 1000);
+    }
+
+    #[test]
+    fn test_settings_sync_retry_interval() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create settings with mismatched values (shouldn't happen in practice)
+        let mut settings = Settings::default();
+        settings.global_retry_interval_ms = 900_000; // 15 minutes
+        settings.retry_interval_minutes = 10; // Wrong value
+
+        // Save and reload should sync the values
+        settings.save(path).expect("Failed to save");
+        let loaded = Settings::load(path).expect("Failed to load");
+
+        // Minutes should be synced to match milliseconds
+        assert_eq!(loaded.retry_interval_minutes, 15);
+        assert_eq!(loaded.global_retry_interval_ms, 900_000);
+    }
+
+    #[test]
+    fn test_settings_set_global_retry_interval_ms() {
+        let mut settings = Settings::default();
+
+        // Set milliseconds directly
+        settings.set_global_retry_interval_ms(1_800_000); // 30 minutes
+
+        // Both values should be updated
+        assert_eq!(settings.global_retry_interval_ms, 1_800_000);
+        assert_eq!(settings.retry_interval_minutes, 30);
+    }
+
+    #[test]
+    fn test_settings_get_retry_intervals() {
+        let settings = Settings::default();
+
+        assert_eq!(settings.get_retry_interval_minutes(), 10);
+        assert_eq!(settings.get_global_retry_interval_ms(), 600_000);
+    }
+
+    #[test]
+    fn test_settings_json_format() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let settings = Settings::default();
+        settings.save(path).expect("Failed to save");
+
+        // Read the JSON file
+        let json = std::fs::read_to_string(path).expect("Failed to read file");
+
+        // Verify JSON contains expected fields
+        assert!(json.contains("retry_interval_minutes"));
+        assert!(json.contains("storage_path"));
+        assert!(json.contains("global_retry_interval_ms"));
+        assert!(json.contains("\"./data\"")); // storage_path default
+
+        // Verify the JSON can be deserialized
+        let parsed: Settings = serde_json::from_str(&json).expect("Failed to parse JSON");
+        assert_eq!(parsed.retry_interval_minutes, 10);
+    }
+
+    #[test]
+    fn test_settings_create_parent_directory() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let path = temp_dir.path().join("subdir").join("settings.json");
+
+        // Parent directory doesn't exist yet
+        assert!(!path.parent().unwrap().exists());
+
+        let settings = Settings::default();
+        settings.save(&path).expect("Failed to save");
+
+        // Parent directory should be created
+        assert!(path.parent().unwrap().exists());
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_new() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create manager
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Should have default values
+        assert_eq!(manager.get_retry_interval_minutes().await, 10);
+        assert_eq!(manager.get_storage_path().await, "./data");
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_set_retry_interval() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Update retry interval
+        manager.set_retry_interval_minutes(20).await.expect("Failed to set");
+
+        // Verify updated
+        assert_eq!(manager.get_retry_interval_minutes().await, 20);
+
+        // Verify persisted
+        let loaded = Settings::load(path).expect("Failed to load");
+        assert_eq!(loaded.retry_interval_minutes, 20);
+        assert_eq!(loaded.global_retry_interval_ms, 20 * 60 * 1000);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_set_storage_path() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Update storage path
+        manager.set_storage_path("/custom/storage".to_string()).await.expect("Failed to set");
+
+        // Verify updated
+        assert_eq!(manager.get_storage_path().await, "/custom/storage");
+
+        // Verify persisted
+        let loaded = Settings::load(path).expect("Failed to load");
+        assert_eq!(loaded.storage_path, "/custom/storage");
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_notifications() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Default should be enabled
+        assert!(manager.get_notifications_enabled().await);
+
+        // Disable
+        manager.set_notifications_enabled(false).await.expect("Failed to set");
+        assert!(!manager.get_notifications_enabled().await);
+
+        // Enable
+        manager.set_notifications_enabled(true).await.expect("Failed to set");
+        assert!(manager.get_notifications_enabled().await);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_max_retries() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Update max retries
+        manager.set_max_message_retries(10).await.expect("Failed to set");
+
+        // Verify
+        assert_eq!(manager.get_max_message_retries().await, 10);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_contact_expiry() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Update contact expiry
+        manager.set_default_contact_expiry_days(60).await.expect("Failed to set");
+
+        // Verify
+        assert_eq!(manager.get_default_contact_expiry_days().await, 60);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_get_all() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Get all settings
+        let settings = manager.get_all().await;
+
+        assert_eq!(settings.retry_interval_minutes, 10);
+        assert_eq!(settings.storage_path, "./data");
+        assert_eq!(settings.max_message_retries, 5);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_update_multiple() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Update multiple settings at once
+        manager.update(|s| {
+            s.retry_interval_minutes = 25;
+            s.global_retry_interval_ms = 25 * 60 * 1000;
+            s.storage_path = "/new/path".to_string();
+            s.max_message_retries = 8;
+        }).await.expect("Failed to update");
+
+        // Verify all updated
+        assert_eq!(manager.get_retry_interval_minutes().await, 25);
+        assert_eq!(manager.get_storage_path().await, "/new/path");
+        assert_eq!(manager.get_max_message_retries().await, 8);
+
+        // Verify persisted
+        let loaded = Settings::load(path).expect("Failed to load");
+        assert_eq!(loaded.retry_interval_minutes, 25);
+        assert_eq!(loaded.storage_path, "/new/path");
+        assert_eq!(loaded.max_message_retries, 8);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_reload() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Update via manager
+        manager.set_retry_interval_minutes(15).await.expect("Failed to set");
+
+        // Modify file directly
+        let mut settings = Settings::load(path).expect("Failed to load");
+        settings.retry_interval_minutes = 30;
+        settings.global_retry_interval_ms = 30 * 60 * 1000;
+        settings.save(path).expect("Failed to save");
+
+        // Manager still has old value
+        assert_eq!(manager.get_retry_interval_minutes().await, 15);
+
+        // Reload from disk
+        manager.reload().await.expect("Failed to reload");
+
+        // Now has new value
+        assert_eq!(manager.get_retry_interval_minutes().await, 30);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_concurrent_access() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+        // Clone for concurrent access
+        let manager1 = manager.clone();
+        let manager2 = manager.clone();
+        let manager3 = manager.clone();
+
+        // Spawn concurrent tasks
+        let task1 = tokio::spawn(async move {
+            manager1.set_retry_interval_minutes(15).await
+        });
+
+        let task2 = tokio::spawn(async move {
+            manager2.set_storage_path("/path1".to_string()).await
+        });
+
+        let task3 = tokio::spawn(async move {
+            manager3.set_notifications_enabled(false).await
+        });
+
+        // Wait for all tasks
+        task1.await.unwrap().expect("Task 1 failed");
+        task2.await.unwrap().expect("Task 2 failed");
+        task3.await.unwrap().expect("Task 3 failed");
+
+        // Verify all changes applied
+        assert_eq!(manager.get_retry_interval_minutes().await, 15);
+        assert_eq!(manager.get_storage_path().await, "/path1");
+        assert!(!manager.get_notifications_enabled().await);
+    }
+
+    #[tokio::test]
+    async fn test_settings_manager_clone() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+        let cloned = manager.clone();
+
+        // Update via original
+        manager.set_retry_interval_minutes(20).await.expect("Failed to set");
+
+        // Clone sees the update (shared state)
+        assert_eq!(cloned.get_retry_interval_minutes().await, 20);
+
+        // Update via clone
+        cloned.set_storage_path("/clone/path".to_string()).await.expect("Failed to set");
+
+        // Original sees the update
+        assert_eq!(manager.get_storage_path().await, "/clone/path");
     }
 }

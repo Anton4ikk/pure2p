@@ -24,7 +24,7 @@ Cargo.lock
 *.ap_
 *.dex
 *.class
-bin/
+/bin/
 gen/
 out/
 .gradle/

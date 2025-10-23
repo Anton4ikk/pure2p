@@ -11,6 +11,7 @@ pub mod protocol;
 pub mod transport;
 pub mod storage;
 pub mod queue;
+pub mod messaging;
 
 /// Result type alias for Pure2P operations
 pub type Result<T> = std::result::Result<T, Error>;
