@@ -2,61 +2,56 @@
 
 # [Pure2P](https://pure2p.com)
 
-**True and Pure P2P Messenger**
+**True P2P Messenger - No Servers, No Compromises**
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![P2P](https://img.shields.io/badge/architecture-P2P-green.svg)]()
 [![No Servers](https://img.shields.io/badge/servers-none-red.svg)]()
 
-*Direct peer-to-peer messaging with no servers, no relays, no compromises.*
+*Direct peer-to-peer messaging with radical honesty about trade-offs.*
 
-[Quick Start](QUICKSTART.md) • [Development](DEVELOPMENT.md) • [Roadmap](ROADMAP.md)
+[Quick Start](#-quick-start) • [How It Works](#-how-it-works) • [Status](#-status) • [Docs](DEVELOPMENT.md)
 
 </div>
 
 ---
 
-## 📖 Overview
+## 📖 What Is Pure2P?
 
-Pure2P is a **radically honest P2P messenger** that prioritizes privacy over convenience.
+A **radically honest P2P messenger** that prioritizes privacy over convenience.
+
+### You Get
+- ✅ Absolute privacy — no metadata leaks
+- ✅ No trust required in operators/intermediaries
+- ✅ Full control of your data
+
+### You Accept
+- ⚠️ Delivery delays (both peers must be online)
+- ⚠️ No push notifications
+- ⚠️ Manual peer management
+- ⚠️ No message history if device is lost
 
 ### Core Principles
-
-- ✅ **Direct P2P only**: No servers, relays, DHT, or push services
-- ✅ **Local-only storage**: No sync, no cloud — device loss means history loss
-- ✅ **Manual contact exchange**: UIDs shared through external channels
-- ✅ **Online-only delivery**: Messages require simultaneous peer presence
-
-### What This Means
-
-**You Get:**
-- Absolute privacy — no metadata leaks
-- No trust in operators or intermediaries
-- Full control of your data
-
-**You Accept:**
-- Delivery delays (both peers must be online)
-- No push notifications
-- Manual peer management
-- No message history if device is lost
+- **Direct P2P only** - No servers, relays, DHT, or push services
+- **Local-only storage** - No sync, no cloud
+- **Manual contact exchange** - UIDs shared through external channels
+- **Online-only delivery** - Messages require simultaneous peer presence
 
 ---
 
 ## 🚀 Quick Start
 
-Get started in 5 minutes with the CLI prototype:
-
 ```bash
-# Install Rust (if needed)
+# Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Build and run
 git clone https://github.com/yourusername/pure2p.git
 cd pure2p
-cargo run --bin pure2p-cli
+cargo run --bin pure2p-tui
 ```
 
-**See [QUICKSTART.md](QUICKSTART.md) for detailed CLI usage and your first P2P message tutorial.**
+**Navigate:** ↑↓ or j/k | **Select:** Enter | **Back:** b/Esc | **Quit:** q
 
 ---
 
@@ -64,182 +59,125 @@ cargo run --bin pure2p-cli
 
 ### Architecture
 
-```mermaid
-graph TB
-    subgraph Sender["Sender Client"]
-        A1[App]
-        A2[Queue<br/>SQLite]
-    end
-
-    subgraph Recipient["Recipient Client"]
-        B1[App]
-        B2[POST /output<br/>Server]
-    end
-
-    A1 -->|Outgoing Message| A2
-    A2 -->|HTTP POST /output<br/>CBOR envelope| B2
-    B2 -->|Delivered| B1
-
-    style A1 fill:#e1f5ff
-    style A2 fill:#fff4e1
-    style B1 fill:#e1f5ff
-    style B2 fill:#e1ffe1
+```
+Alice's Client          Bob's Client
+──────────────         ──────────────
+[Send Message]   ───→  [POST /output]
+      ↓                      ↓
+   [Queue]              [Delivered]
+   (retry)
 ```
 
-### Message Flow
+**Flow:**
+1. Alice POSTs message to Bob's `/output` endpoint
+2. **Success?** Bob responds 200 → delivered
+3. **Offline?** Message queued with exponential backoff
+4. **Retry** when Bob comes online
 
-1. **Send**: Client POSTs message to peer's `/output` endpoint
-2. **Success**: Peer responds 200 → message delivered
-3. **Failure**: Message queued locally with exponential backoff
-4. **Retry**: Queue attempts delivery when peer comes online
-
-### Key Components
-
-- **Crypto**: Ed25519 keypairs, SHA-256 UID derivation
-- **Protocol**: CBOR-serialized message envelopes
-- **Transport**: HTTP/1.1 server with `/output`, `/ping`, and `/message` endpoints
-- **Queue**: SQLite-backed retry queue with exponential backoff and startup retry
-- **Storage**: Contact tokens, chat structures, and application state persistence
-
-**See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture details and [CLAUDE.md](CLAUDE.md) for implementation notes.**
+### Key Tech
+- **Crypto**: Ed25519 keypairs, SHA-256 UIDs
+- **Protocol**: CBOR message envelopes
+- **Transport**: HTTP/1.1 (`/output`, `/ping`, `/message`)
+- **Queue**: SQLite with retry backoff
+- **Storage**: Local-only (contacts, chats, settings)
 
 ---
 
 ## 💻 Platform Support
 
-### Current (v0.1)
-
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **macOS** | ✅ | CLI client (Intel + Apple Silicon) |
-| **Linux** | ✅ | CLI client (x86_64 + ARM64) |
-| **Windows** | ✅ | CLI client (x86_64) |
-| **Android** | 🔄 | Core library ready, GUI pending |
-| **iOS** | 🔄 | Core library ready, GUI pending |
+| **macOS** | ✅ | TUI client (Intel + Apple Silicon) |
+| **Linux** | ✅ | TUI client (x86_64 + ARM64) |
+| **Windows** | ✅ | TUI client (x86_64) |
+| **Android** | 🔄 | Core ready, GUI pending |
+| **iOS** | 🔄 | Core ready, GUI pending |
 
-### Architecture
+**Planned:** NAT Traversal (v0.3) • Desktop apps (v0.4) • Mobile apps (v0.5)
 
-```mermaid
-graph TB
-    subgraph UI["Platform-Native UI"]
-        direction LR
-        Swift["Swift (iOS)"]
-        Kotlin["Kotlin (Android)"]
-        Tauri["Tauri (Desktop)"]
-    end
-
-    subgraph FFI["FFI Bridge (cdylib)"]
-        direction LR
-        CCompat["C-compatible interface"]
-    end
-
-    subgraph Core["Pure2P Rust Core (90%+ shared code)"]
-        direction LR
-        Crypto[crypto]
-        Protocol[protocol]
-        Transport[transport]
-        Queue[queue]
-    end
-
-    UI --> FFI
-    FFI --> Core
-
-    style UI fill:#e1f5ff
-    style FFI fill:#fff4e1
-    style Core fill:#e1ffe1
-```
-
-**Planned:**
-- v0.2 (Q2 2025): Storage, encryption, rich messages ([ROADMAP.md](ROADMAP.md#-version-02---enhanced-core-q2-2025))
-- v0.3 (Q3 2025): Desktop GUI with Tauri ([ROADMAP.md](ROADMAP.md#-version-03---desktop-clients-q3-2025))
-- v0.4 (Q4 2025): Mobile apps (iOS/Android) ([ROADMAP.md](ROADMAP.md#-version-04---mobile-clients-q4-2025))
-
-**See [ROADMAP.md](ROADMAP.md) for complete version timeline.**
+See [ROADMAP.md](ROADMAP.md) for timeline.
 
 ---
 
-## 📚 Documentation
-
-- **[Quick Start Guide](QUICKSTART.md)** - Get the CLI running in 5 minutes
-- **[Development Guide](DEVELOPMENT.md)** - Architecture, message format, API docs
-- **[Roadmap](ROADMAP.md)** - Version timeline and planned features
-
----
-
-## 🎯 Current Status (v0.1)
+## 🎯 Status (v0.2 - In Progress)
 
 ### Implemented ✅
 
-- Ed25519 keypairs and UID generation
-- CBOR message serialization
-- HTTP transport with POST `/output`
-- SQLite message queue with retry
-- Cross-platform CLI client (macOS, Linux, Windows)
+**Core:**
+- Ed25519 keypairs, UID generation
+- CBOR serialization, HTTP transport
+- SQLite queue with retry
+- Contact tokens, state persistence
+
+**TUI:**
+- Contact share/import with validation
+- Chat list with status badges (● ⌛ ⚠ ○)
+- Real-time messaging
+- Delete with confirmation
+- Settings with auto-save
+- Startup sync progress
 
 ### Limitations ⚠️
 
-- No encryption (plaintext payloads) — planned for v0.2
-- No persistent storage — planned for v0.2
-- No NAT traversal — planned for v0.5 ([ROADMAP.md](ROADMAP.md#-version-05---nat-traversal-q1-2026))
+- No encryption (plaintext) — v0.3
+- No NAT traversal — v0.3
+- Text only — rich media in v0.4
 - Manual peer management
-- Text messages only — rich media in v0.2
 
-**This is a prototype for testing the P2P architecture. See [ROADMAP.md](ROADMAP.md) for planned features.**
+**This is a prototype.** See [ROADMAP.md](ROADMAP.md) for planned features.
 
 ---
 
 ## 🤝 Contributing
 
-Pure2P welcomes contributions that align with our core principles.
+1. **Discuss**: Open an issue
+2. **Develop**: Fork, branch, code
+3. **Test**: `cargo test && cargo clippy`
+4. **Submit**: PR with clear description
 
-### How to Contribute
+See [DEVELOPMENT.md](DEVELOPMENT.md) for setup.
 
-1. **Discuss**: Open an issue to discuss your idea
-2. **Develop**: Fork, create feature branch, make changes
-3. **Test**: Run `cargo test` and `cargo clippy` (see [DEVELOPMENT.md](DEVELOPMENT.md#code-quality))
-4. **Submit**: Create pull request with clear description
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for setup instructions and development workflow.
-
-### Philosophy First
-
-All contributions must maintain Pure2P's core values:
-- ✅ Direct P2P communication only
-- ✅ No servers, relays, or intermediaries
-- ✅ Local-only storage and state
-- ✅ Transparency about limitations
+### Must Maintain
+- Direct P2P only
+- No servers/relays/intermediaries
+- Local-only storage
+- Transparency about limitations
 
 ---
 
 ## 🎯 Why Pure2P?
 
-### The Problem
+**Problem:** Modern messengers compromise privacy
+- Signal/WhatsApp: Servers see metadata (who, when)
+- Telegram/Matrix: Federation requires server trust
+- "P2P" apps: Often use hidden relays
 
-Modern messengers compromise privacy:
-- **Signal/WhatsApp**: Centralized servers see metadata (who talks to whom, when)
-- **Telegram/Matrix**: Federation still requires trust in servers
-- **Peer apps with relays**: "P2P" apps that secretly use relay servers
+**Solution:** Different trade-off
+- **Privacy first**: No metadata, no trust needed
+- **Honest about cost**: Delays, no push, manual setup
 
-### The Solution
+**For those who value privacy over convenience.**
 
-Pure2P makes a different trade-off:
-- **You get**: Absolute privacy, no trust required, full data control
-- **You accept**: Delivery delays, no push, manual setup
+---
 
-**Pure2P is for those who value privacy over convenience.**
+## 📚 Documentation
+
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Setup, architecture, API
+- **[ROADMAP.md](ROADMAP.md)** - Version timeline
+- **[CLAUDE.md](CLAUDE.md)** - Implementation notes
 
 ---
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE)
 
 ---
 
 <div align="center">
 
-**[Quick Start](QUICKSTART.md)** • **[Development](DEVELOPMENT.md)** • **[Roadmap](ROADMAP.md)**
+**Privacy-first messaging 🔒**
 
-Made with privacy in mind 🔒
+[Get Started](#-quick-start) • [Contribute](#-contributing) • [Roadmap](ROADMAP.md)
 
 </div>

@@ -704,13 +704,13 @@ impl Default for AppState {
 
 /// Local storage manager
 pub struct Storage {
-    conn: Option<Connection>,
+    _conn: Option<Connection>,
 }
 
 impl Storage {
     /// Create a new storage instance
     pub fn new() -> Self {
-        Self { conn: None }
+        Self { _conn: None }
     }
 
     /// Initialize storage with a database file
@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn test_storage_creation() {
         let storage = Storage::new();
-        assert!(storage.conn.is_none());
+        assert!(storage._conn.is_none());
     }
 
     #[test]
