@@ -143,6 +143,174 @@ pub struct Message {
     pub delivered: bool,
 }
 
+/// Represents a chat conversation with a contact
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chat {
+    /// Contact UID this chat is with
+    pub contact_uid: String,
+    /// Messages in this conversation
+    pub messages: Vec<Message>,
+    /// Whether this chat is active (unread messages present)
+    pub is_active: bool,
+}
+
+impl Chat {
+    /// Create a new chat with a contact
+    pub fn new(contact_uid: String) -> Self {
+        Self {
+            contact_uid,
+            messages: Vec::new(),
+            is_active: false,
+        }
+    }
+
+    /// Append a message to this chat
+    pub fn append_message(&mut self, msg: Message) {
+        self.messages.push(msg);
+    }
+
+    /// Mark chat as having unread messages (active)
+    pub fn mark_unread(&mut self) {
+        self.is_active = true;
+    }
+
+    /// Mark chat as read (inactive)
+    pub fn mark_read(&mut self) {
+        self.is_active = false;
+    }
+}
+
+/// Application settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    /// Default contact expiry duration in days
+    pub default_contact_expiry_days: u32,
+    /// Auto-accept contact requests
+    pub auto_accept_contacts: bool,
+    /// Maximum retry attempts for message delivery
+    pub max_message_retries: u32,
+    /// Base delay for retry backoff in milliseconds
+    pub retry_base_delay_ms: u64,
+    /// Enable notifications
+    pub enable_notifications: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            default_contact_expiry_days: 30,
+            auto_accept_contacts: false,
+            max_message_retries: 5,
+            retry_base_delay_ms: 1000,
+            enable_notifications: true,
+        }
+    }
+}
+
+/// Persistent application state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppState {
+    /// List of contacts
+    pub contacts: Vec<Contact>,
+    /// List of chat conversations
+    pub chats: Vec<Chat>,
+    /// Queued messages awaiting delivery
+    pub message_queue: Vec<String>, // Message IDs in queue
+    /// Application settings
+    pub settings: Settings,
+}
+
+impl AppState {
+    /// Create a new empty application state
+    pub fn new() -> Self {
+        Self {
+            contacts: Vec::new(),
+            chats: Vec::new(),
+            message_queue: Vec::new(),
+            settings: Settings::default(),
+        }
+    }
+
+    /// Save the application state to a file
+    ///
+    /// # Arguments
+    /// * `path` - Path to the state file (e.g., "pure2p_state.json")
+    ///
+    /// # Errors
+    /// Returns an error if file operations or serialization fail
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)
+            .map_err(|e| Error::Storage(format!("Failed to write state file: {}", e)))?;
+        Ok(())
+    }
+
+    /// Load the application state from a file
+    ///
+    /// # Arguments
+    /// * `path` - Path to the state file
+    ///
+    /// # Returns
+    /// A loaded `AppState` or a new empty state if the file doesn't exist
+    ///
+    /// # Errors
+    /// Returns an error if the file exists but cannot be read or deserialized
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path_ref = path.as_ref();
+
+        // If file doesn't exist, return a new empty state
+        if !path_ref.exists() {
+            return Ok(Self::new());
+        }
+
+        // Read and deserialize the file
+        let json = std::fs::read_to_string(path_ref)
+            .map_err(|e| Error::Storage(format!("Failed to read state file: {}", e)))?;
+
+        let state: AppState = serde_json::from_str(&json)?;
+        Ok(state)
+    }
+
+    /// Save state using CBOR format (more compact)
+    ///
+    /// # Arguments
+    /// * `path` - Path to the state file (e.g., "pure2p_state.cbor")
+    pub fn save_cbor<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let cbor = serde_cbor::to_vec(self)
+            .map_err(|e| Error::CborSerialization(format!("Failed to serialize state: {}", e)))?;
+        std::fs::write(path, cbor)
+            .map_err(|e| Error::Storage(format!("Failed to write state file: {}", e)))?;
+        Ok(())
+    }
+
+    /// Load state from CBOR format
+    ///
+    /// # Arguments
+    /// * `path` - Path to the CBOR state file
+    pub fn load_cbor<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path_ref = path.as_ref();
+
+        // If file doesn't exist, return a new empty state
+        if !path_ref.exists() {
+            return Ok(Self::new());
+        }
+
+        // Read and deserialize the file
+        let cbor = std::fs::read(path_ref)
+            .map_err(|e| Error::Storage(format!("Failed to read state file: {}", e)))?;
+
+        let state: AppState = serde_cbor::from_slice(&cbor)
+            .map_err(|e| Error::CborSerialization(format!("Failed to deserialize state: {}", e)))?;
+        Ok(state)
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Local storage manager
 pub struct Storage {
     conn: Option<Connection>,
@@ -532,5 +700,321 @@ mod tests {
 
         // Should produce identical tokens
         assert_eq!(token1, token2);
+    }
+
+    #[test]
+    fn test_chat_creation() {
+        let chat = Chat::new("test_uid_123".to_string());
+
+        assert_eq!(chat.contact_uid, "test_uid_123");
+        assert!(chat.messages.is_empty());
+        assert!(!chat.is_active);
+    }
+
+    #[test]
+    fn test_chat_append_message() {
+        let mut chat = Chat::new("uid_456".to_string());
+
+        let msg1 = Message {
+            id: "msg_1".to_string(),
+            sender: "sender_1".to_string(),
+            recipient: "uid_456".to_string(),
+            content: vec![1, 2, 3],
+            timestamp: 1000,
+            delivered: false,
+        };
+
+        chat.append_message(msg1);
+        assert_eq!(chat.messages.len(), 1);
+        assert_eq!(chat.messages[0].id, "msg_1");
+
+        let msg2 = Message {
+            id: "msg_2".to_string(),
+            sender: "sender_2".to_string(),
+            recipient: "uid_456".to_string(),
+            content: vec![4, 5, 6],
+            timestamp: 2000,
+            delivered: true,
+        };
+
+        chat.append_message(msg2);
+        assert_eq!(chat.messages.len(), 2);
+        assert_eq!(chat.messages[1].timestamp, 2000);
+    }
+
+    #[test]
+    fn test_chat_active_management() {
+        let mut chat = Chat::new("uid_789".to_string());
+
+        // Initially not active
+        assert!(!chat.is_active);
+
+        // Mark as unread (active)
+        chat.mark_unread();
+        assert!(chat.is_active);
+
+        // Mark as read (inactive)
+        chat.mark_read();
+        assert!(!chat.is_active);
+
+        // Can mark unread multiple times
+        chat.mark_unread();
+        chat.mark_unread();
+        assert!(chat.is_active);
+    }
+
+    #[test]
+    fn test_settings_default() {
+        let settings = Settings::default();
+
+        assert_eq!(settings.default_contact_expiry_days, 30);
+        assert!(!settings.auto_accept_contacts);
+        assert_eq!(settings.max_message_retries, 5);
+        assert_eq!(settings.retry_base_delay_ms, 1000);
+        assert!(settings.enable_notifications);
+    }
+
+    #[test]
+    fn test_app_state_creation() {
+        let state = AppState::new();
+
+        assert!(state.contacts.is_empty());
+        assert!(state.chats.is_empty());
+        assert!(state.message_queue.is_empty());
+        assert_eq!(state.settings.default_contact_expiry_days, 30);
+    }
+
+    #[test]
+    fn test_app_state_save_load_json() {
+        use tempfile::NamedTempFile;
+
+        // Create temp file
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create state with some data
+        let mut state = AppState::new();
+        state.contacts.push(Contact::new(
+            "test_uid".to_string(),
+            "127.0.0.1:8080".to_string(),
+            vec![1, 2, 3, 4],
+            Utc::now() + Duration::days(30),
+        ));
+        state.chats.push(Chat::new("test_uid".to_string()));
+        state.message_queue.push("msg_1".to_string());
+        state.settings.enable_notifications = false;
+
+        // Save state
+        state.save(path).expect("Failed to save state");
+
+        // Load state
+        let loaded = AppState::load(path).expect("Failed to load state");
+
+        // Verify all fields
+        assert_eq!(loaded.contacts.len(), 1);
+        assert_eq!(loaded.contacts[0].uid, "test_uid");
+        assert_eq!(loaded.chats.len(), 1);
+        assert_eq!(loaded.chats[0].contact_uid, "test_uid");
+        assert_eq!(loaded.message_queue.len(), 1);
+        assert_eq!(loaded.message_queue[0], "msg_1");
+        assert!(!loaded.settings.enable_notifications);
+    }
+
+    #[test]
+    fn test_app_state_save_load_cbor() {
+        use tempfile::NamedTempFile;
+
+        // Create temp file
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create state with some data
+        let mut state = AppState::new();
+        state.contacts.push(Contact::new(
+            "cbor_uid".to_string(),
+            "192.168.1.1:9000".to_string(),
+            vec![10, 20, 30],
+            Utc::now() + Duration::days(60),
+        ));
+        state.settings.max_message_retries = 10;
+
+        // Save state as CBOR
+        state.save_cbor(path).expect("Failed to save state as CBOR");
+
+        // Load state from CBOR
+        let loaded = AppState::load_cbor(path).expect("Failed to load state from CBOR");
+
+        // Verify fields
+        assert_eq!(loaded.contacts.len(), 1);
+        assert_eq!(loaded.contacts[0].uid, "cbor_uid");
+        assert_eq!(loaded.settings.max_message_retries, 10);
+    }
+
+    #[test]
+    fn test_app_state_load_nonexistent_file() {
+        // Try to load from a file that doesn't exist
+        let loaded = AppState::load("/tmp/nonexistent_pure2p_state.json")
+            .expect("Should return empty state for nonexistent file");
+
+        // Should return a new empty state
+        assert!(loaded.contacts.is_empty());
+        assert!(loaded.chats.is_empty());
+        assert_eq!(loaded.settings.default_contact_expiry_days, 30);
+    }
+
+    #[test]
+    fn test_app_state_load_cbor_nonexistent_file() {
+        // Try to load from a CBOR file that doesn't exist
+        let loaded = AppState::load_cbor("/tmp/nonexistent_pure2p_state.cbor")
+            .expect("Should return empty state for nonexistent file");
+
+        // Should return a new empty state
+        assert!(loaded.contacts.is_empty());
+        assert!(loaded.chats.is_empty());
+    }
+
+    #[test]
+    fn test_app_state_with_multiple_contacts_and_chats() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        // Create state with multiple contacts and chats
+        let mut state = AppState::new();
+
+        for i in 0..5 {
+            let uid = format!("uid_{}", i);
+            state.contacts.push(Contact::new(
+                uid.clone(),
+                format!("10.0.0.{}:8080", i),
+                vec![i as u8; 10],
+                Utc::now() + Duration::days(30),
+            ));
+
+            let mut chat = Chat::new(uid.clone());
+            let msg = Message {
+                id: format!("msg_{}", i),
+                sender: uid.clone(),
+                recipient: "self".to_string(),
+                content: vec![i as u8; 5],
+                timestamp: 1000 * i as i64,
+                delivered: true,
+            };
+            chat.append_message(msg);
+            chat.mark_unread();
+            state.chats.push(chat);
+        }
+
+        // Save and load
+        state.save(path).expect("Failed to save state");
+        let loaded = AppState::load(path).expect("Failed to load state");
+
+        // Verify
+        assert_eq!(loaded.contacts.len(), 5);
+        assert_eq!(loaded.chats.len(), 5);
+        assert!(loaded.chats[0].is_active);
+        assert_eq!(loaded.chats[4].contact_uid, "uid_4");
+        assert_eq!(loaded.chats[0].messages.len(), 1);
+    }
+
+    #[test]
+    fn test_app_state_json_format_human_readable() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let path = temp_file.path();
+
+        let mut state = AppState::new();
+        state.contacts.push(Contact::new(
+            "readable_uid".to_string(),
+            "127.0.0.1:8080".to_string(),
+            vec![1, 2, 3],
+            Utc::now() + Duration::days(7),
+        ));
+
+        // Save state
+        state.save(path).expect("Failed to save state");
+
+        // Read raw file content
+        let content = std::fs::read_to_string(path).expect("Failed to read file");
+
+        // Verify it's human-readable JSON
+        assert!(content.contains("readable_uid"));
+        assert!(content.contains("127.0.0.1:8080"));
+        assert!(content.contains("contacts"));
+        assert!(content.contains("settings"));
+    }
+
+    #[test]
+    fn test_settings_serialization() {
+        let mut settings = Settings::default();
+        settings.default_contact_expiry_days = 90;
+        settings.auto_accept_contacts = true;
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&settings).expect("Failed to serialize");
+
+        // Deserialize
+        let loaded: Settings = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(loaded.default_contact_expiry_days, 90);
+        assert!(loaded.auto_accept_contacts);
+    }
+
+    #[test]
+    fn test_message_serialization() {
+        let msg = Message {
+            id: "test_msg_123".to_string(),
+            sender: "sender_uid".to_string(),
+            recipient: "recipient_uid".to_string(),
+            content: vec![10, 20, 30, 40, 50],
+            timestamp: 1234567890,
+            delivered: true,
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&msg).expect("Failed to serialize message");
+
+        // Deserialize
+        let loaded: Message = serde_json::from_str(&json).expect("Failed to deserialize message");
+
+        assert_eq!(loaded.id, "test_msg_123");
+        assert_eq!(loaded.sender, "sender_uid");
+        assert_eq!(loaded.recipient, "recipient_uid");
+        assert_eq!(loaded.content, vec![10, 20, 30, 40, 50]);
+        assert_eq!(loaded.timestamp, 1234567890);
+        assert!(loaded.delivered);
+    }
+
+    #[test]
+    fn test_chat_with_messages_serialization() {
+        let mut chat = Chat::new("contact_123".to_string());
+
+        // Add multiple messages
+        for i in 0..3 {
+            let msg = Message {
+                id: format!("msg_{}", i),
+                sender: "sender".to_string(),
+                recipient: "contact_123".to_string(),
+                content: vec![i as u8; 10],
+                timestamp: 1000 * i as i64,
+                delivered: i % 2 == 0,
+            };
+            chat.append_message(msg);
+        }
+        chat.mark_unread();
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&chat).expect("Failed to serialize chat");
+
+        // Deserialize
+        let loaded: Chat = serde_json::from_str(&json).expect("Failed to deserialize chat");
+
+        assert_eq!(loaded.contact_uid, "contact_123");
+        assert_eq!(loaded.messages.len(), 3);
+        assert!(loaded.is_active);
+        assert_eq!(loaded.messages[0].id, "msg_0");
+        assert_eq!(loaded.messages[2].timestamp, 2000);
     }
 }
