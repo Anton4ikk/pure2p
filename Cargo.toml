@@ -1,11 +1,11 @@
 [package]
 name = "pure2p"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Pure2P Team"]
 description = "A pure peer-to-peer messaging system with cross-platform support"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/pure2p"
+repository = "https://github.com/Anton4ikk/pure2p"
 
 [lib]
 name = "pure2p"

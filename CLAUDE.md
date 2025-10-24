@@ -41,6 +41,14 @@ cargo fmt
 
 **`messaging`** - High-level API combining transport/queue/storage. Send with auto-queue, chat lifecycle, smart deletion
 
+**`connectivity`** - Port forwarding protocols (PCP, NAT-PMP, UPnP). Auto-discovery, mapping management, diagnostics
+
+**`tui`** - Terminal UI module (library, not binary). Reusable across platforms:
+- `types.rs` - Screen and MenuItem enums
+- `screens.rs` - All screen state structs (ShareContact, ImportContact, ChatList, ChatView, Settings, Diagnostics, StartupSync)
+- `app.rs` - Main App struct with business logic
+- `ui.rs` - Rendering functions (ratatui-based)
+
 ## Data Structures
 
 **Contact** - `uid`, `ip`, `pubkey`, `expiry`, `is_active`. Methods: `is_expired()`, `activate()`, `deactivate()`
@@ -51,9 +59,17 @@ cargo fmt
 
 **Settings** - Retry intervals, storage path, contact expiry, max retries. Auto-save to JSON. Thread-safe SettingsManager for UI.
 
-## TUI Client (`src/bin/tui.rs`)
+## TUI Architecture
 
-Terminal UI with ratatui. Screen-based state machine, 100ms event loop.
+**Binary (`src/bin/tui.rs`)** - Thin wrapper (~280 lines):
+- `main()` - Terminal initialization/cleanup
+- `run_app()` - Event loop with 100ms polling
+- Keyboard mapping to App methods
+
+**Library (`src/tui/`)** - Reusable UI logic:
+- Used by TUI binary, future mobile/desktop UIs
+- Fully tested (90 unit tests)
+- Platform-agnostic business logic
 
 **Screens:**
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time)
@@ -63,6 +79,7 @@ Terminal UI with ratatui. Screen-based state machine, 100ms event loop.
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter
 7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
+8. **Diagnostics** - Port forwarding status (PCP, NAT-PMP, UPnP)
 
 **Keyboard:** q/Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
 
@@ -105,10 +122,23 @@ Terminal UI with ratatui. Screen-based state machine, 100ms event loop.
 
 ## Testing
 
+**Structure:**
+- All tests extracted to `src/tests/` directory (233 total tests)
 - Pattern: `test_<feature>_<scenario>`
-- Every module has `#[cfg(test)] mod tests`
-- Test success and failure paths
-- TUI: ~60 unit tests covering all screens, state, validation
+- Test both success and failure paths
+
+**Test Files:**
+- `crypto_tests.rs` (7 tests) - Keypair generation, signing, UID derivation
+- `protocol_tests.rs` (10 tests) - Message envelope serialization, versioning
+- `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
+- `storage_tests.rs` (51 tests) - Contact tokens, AppState, Settings persistence
+- `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
+- `messaging_tests.rs` (17 tests) - High-level messaging API
+- `connectivity_tests.rs` (15 tests) - Port forwarding protocols
+- `tui_tests.rs` (90 tests) - All TUI screens, App state, navigation
+- `lib_tests.rs` (1 test) - Library initialization
+
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's just glue code. All logic is tested in `tui_tests.rs`.
 
 ## Dependencies
 

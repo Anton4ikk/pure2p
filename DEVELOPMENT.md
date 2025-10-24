@@ -41,14 +41,33 @@ sudo apt-get install build-essential pkg-config libssl-dev
 
 ```
 src/
-├── lib.rs         # Entry point, error types
-├── crypto.rs      # Ed25519, UIDs
-├── protocol.rs    # CBOR/JSON envelopes
-├── transport.rs   # HTTP server/client
-├── storage.rs     # Contacts, chats, AppState
-├── queue.rs       # SQLite retry queue
-├── messaging.rs   # High-level API
-└── bin/tui.rs     # Terminal UI
+├── lib.rs              # Entry point, error types
+├── crypto.rs           # Ed25519, UIDs
+├── protocol.rs         # CBOR/JSON envelopes
+├── transport.rs        # HTTP server/client
+├── storage.rs          # Contacts, chats, AppState
+├── queue.rs            # SQLite retry queue
+├── messaging.rs        # High-level API
+├── connectivity.rs     # Port forwarding (PCP, NAT-PMP, UPnP)
+├── tui/                # TUI module (library)
+│   ├── mod.rs          # Module exports
+│   ├── types.rs        # Screen, MenuItem enums
+│   ├── screens.rs      # Screen state structs
+│   ├── app.rs          # App business logic
+│   └── ui.rs           # Rendering functions
+├── tests/              # Unit tests (233 tests)
+│   ├── mod.rs
+│   ├── crypto_tests.rs
+│   ├── protocol_tests.rs
+│   ├── transport_tests.rs
+│   ├── storage_tests.rs
+│   ├── queue_tests.rs
+│   ├── messaging_tests.rs
+│   ├── connectivity_tests.rs
+│   ├── tui_tests.rs
+│   └── lib_tests.rs
+└── bin/
+    └── tui.rs          # TUI binary (thin wrapper)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.
@@ -64,9 +83,12 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests
-cargo test crypto::            # Specific module
+cargo test                     # All tests (233 total)
+cargo test --lib               # Library tests only
+cargo test crypto              # Specific module
+cargo test tui_tests           # TUI tests (90 tests)
 cargo test -- --nocapture      # Show output
+cargo test -- --test-threads=1 # Sequential (if needed)
 
 # Quality
 cargo fmt                      # Format
@@ -99,6 +121,37 @@ git push origin feature/name
 ```
 
 **Commit Prefixes:** `feat`, `fix`, `chore`, `docs`, `test`
+
+---
+
+## Testing Architecture
+
+**All tests are in `src/tests/`** (not inline in modules):
+
+```
+src/tests/
+├── crypto_tests.rs      (7 tests)   - Keypair, signing, UID
+├── protocol_tests.rs    (10 tests)  - Envelopes, serialization
+├── transport_tests.rs   (26 tests)  - HTTP, peers, delivery
+├── storage_tests.rs     (51 tests)  - Tokens, AppState, Settings
+├── queue_tests.rs       (34 tests)  - SQLite queue, retries
+├── messaging_tests.rs   (17 tests)  - High-level messaging API
+├── connectivity_tests.rs (15 tests) - Port forwarding
+├── tui_tests.rs         (90 tests)  - All TUI screens/logic
+└── lib_tests.rs         (1 test)    - Library init
+```
+
+**Benefits:**
+- ✅ Clean separation of code and tests
+- ✅ Easier navigation and maintenance
+- ✅ TUI logic testable (in library, not binary)
+- ✅ Binary (`src/bin/tui.rs`) needs no tests - it's glue code
+
+**Run specific test file:**
+```bash
+cargo test --test crypto_tests
+cargo test --test tui_tests
+```
 
 ---
 
