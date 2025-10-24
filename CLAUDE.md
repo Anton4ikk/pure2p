@@ -41,7 +41,15 @@ cargo fmt
 
 **`messaging`** - High-level API combining transport/queue/storage. Send with auto-queue, chat lifecycle, smart deletion
 
-**`connectivity`** - Port forwarding protocols (PCP, NAT-PMP, UPnP). Auto-discovery, mapping management, diagnostics
+**`connectivity`** - Modular NAT traversal system with IPv6 → PCP → NAT-PMP → UPnP orchestration:
+- `types.rs` - Common types (PortMappingResult, MappingProtocol, MappingError, ConnectivityResult, StrategyAttempt, IpProtocol)
+- `gateway.rs` - Cross-platform gateway discovery (Linux, macOS, Windows)
+- `pcp.rs` - PCP (Port Control Protocol, RFC 6887) implementation
+- `natpmp.rs` - NAT-PMP (RFC 6886) implementation
+- `upnp.rs` - UPnP IGD implementation
+- `ipv6.rs` - IPv6 direct connectivity detection
+- `orchestrator.rs` - Main `establish_connectivity()` function with automatic fallback
+- `manager.rs` - PortMappingManager (PCP auto-renewal), UpnpMappingManager (cleanup)
 
 **`tui`** - Terminal UI module (library, not binary). Reusable across platforms:
 - `types.rs` - Screen and MenuItem enums
@@ -120,10 +128,41 @@ cargo fmt
 - `delete_chat()` → smart (active=notify, inactive=local)
 - `handle_incoming_message()` → auto-create chat if missing
 
+### Connectivity
+
+**Module Architecture** (9 files, ~150-400 lines each):
+- `types.rs` - Shared types: PortMappingResult, MappingError, ConnectivityResult, StrategyAttempt, IpProtocol
+- `gateway.rs` - Cross-platform gateway discovery (Linux/macOS/Windows)
+- `pcp.rs` - PCP implementation with PcpOpcode, PcpResultCode enums
+- `natpmp.rs` - NAT-PMP implementation with NatPmpOpcode, NatPmpResultCode enums
+- `upnp.rs` - UPnP IGD with blocking operations
+- `ipv6.rs` - IPv6 detection helpers (check_ipv6_connectivity, is_ipv6_link_local)
+- `orchestrator.rs` - Main `establish_connectivity()` function
+- `manager.rs` - PortMappingManager (PCP), UpnpMappingManager (UPnP)
+- `mod.rs` - Public API with re-exports
+
+**Orchestrator Behavior**:
+- `establish_connectivity(port)` tries IPv6 → PCP → NAT-PMP → UPnP sequentially
+- Returns `ConnectivityResult` with full tracking of all attempts
+- Each protocol gets `StrategyAttempt`: NotAttempted | Success(mapping) | Failed(error)
+- Stops on first success, continues through all on failure
+- `result.summary()` generates UX string: "IPv6: no → PCP: ok → external 203.0.113.5:60000"
+
+**Protocol Details**:
+- **PCP** (RFC 6887): 60-byte MAP requests, up to 1100-byte responses, UDP port 5351
+- **NAT-PMP** (RFC 6886): 12-byte requests, 16-byte responses, requires separate external IP request
+- **UPnP**: SSDP discovery + SOAP, blocking I/O spawned to tokio::task::spawn_blocking
+- **IPv6**: Binds to `[::]`, connects to public IPv6 (2001:4860:4860::8888) to verify global address
+
+**Lifecycle Management**:
+- `PortMappingManager`: Auto-renews PCP mappings at 80% of lifetime (e.g., 48 min for 1 hour)
+- `UpnpMappingManager`: Auto-cleanup on Drop (best-effort thread spawn)
+- Gateway discovery: Platform-specific (Linux: /proc/net/route, macOS: netstat, Windows: route print)
+
 ## Testing
 
 **Structure:**
-- All tests extracted to `src/tests/` directory (233 total tests)
+- All tests extracted to `src/tests/` directory (285 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 
@@ -134,8 +173,8 @@ cargo fmt
 - `storage_tests.rs` (51 tests) - Contact tokens, AppState, Settings persistence
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (15 tests) - Port forwarding protocols
-- `tui_tests.rs` (90 tests) - All TUI screens, App state, navigation
+- `connectivity_tests.rs` (26 tests) - PCP, NAT-PMP, UPnP protocols, orchestrator, IPv6 detection
+- `tui_tests.rs` (113 tests) - All TUI screens, App state, navigation
 - `lib_tests.rs` (1 test) - Library initialization
 
 **Note:** Binary (`src/bin/tui.rs`) has no tests - it's just glue code. All logic is tested in `tui_tests.rs`.

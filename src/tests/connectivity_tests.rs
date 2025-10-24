@@ -1,4 +1,7 @@
 use crate::connectivity::*;
+use crate::connectivity::pcp::{PcpResultCode, PcpOpcode, build_pcp_map_request, parse_pcp_ip_address, PCP_VERSION};
+use crate::connectivity::natpmp::{NatPmpResultCode, NatPmpOpcode, build_natpmp_map_request, parse_natpmp_map_response, NATPMP_VERSION};
+use crate::connectivity::ipv6::is_ipv6_link_local;
 use std::net::{IpAddr, Ipv4Addr};
 
 #[test]
@@ -249,3 +252,181 @@ fn test_natpmp_response_error_code() {
         assert_eq!(msg, "Network failure");
     }
 }
+
+// ========================================================================
+// Connectivity Orchestrator Tests
+// ========================================================================
+
+#[test]
+fn test_connectivity_result_creation() {
+    let result = ConnectivityResult::new();
+    assert!(matches!(result.ipv6, StrategyAttempt::NotAttempted));
+    assert!(matches!(result.pcp, StrategyAttempt::NotAttempted));
+    assert!(matches!(result.natpmp, StrategyAttempt::NotAttempted));
+    assert!(matches!(result.upnp, StrategyAttempt::NotAttempted));
+    assert!(result.mapping.is_none());
+    assert!(!result.is_success());
+}
+
+#[test]
+fn test_connectivity_result_default() {
+    let result = ConnectivityResult::default();
+    assert!(!result.is_success());
+    assert!(result.mapping.is_none());
+}
+
+#[test]
+fn test_connectivity_result_with_ipv6_success() {
+    use std::net::Ipv6Addr;
+
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+        external_port: 8080,
+        lifetime_secs: 0,
+        protocol: MappingProtocol::IPv6,
+        created_at_ms: 1234567890000,
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.ipv6 = StrategyAttempt::Success(mapping.clone());
+    result.mapping = Some(mapping);
+
+    assert!(result.is_success());
+    assert!(matches!(result.ipv6, StrategyAttempt::Success(_)));
+}
+
+#[test]
+fn test_connectivity_result_summary_all_not_attempted() {
+    let result = ConnectivityResult::new();
+    let summary = result.summary();
+
+    assert!(summary.contains("IPv6: not checked"));
+    assert!(summary.contains("PCP: not tried"));
+    assert!(summary.contains("NAT-PMP: not tried"));
+    assert!(summary.contains("UPnP: not tried"));
+}
+
+#[test]
+fn test_connectivity_result_summary_all_failed() {
+    let mut result = ConnectivityResult::new();
+    result.ipv6 = StrategyAttempt::Failed("no address".to_string());
+    result.pcp = StrategyAttempt::Failed("timeout".to_string());
+    result.natpmp = StrategyAttempt::Failed("no gateway".to_string());
+    result.upnp = StrategyAttempt::Failed("not supported".to_string());
+
+    let summary = result.summary();
+
+    assert!(summary.contains("IPv6: no address"));
+    assert!(summary.contains("PCP: timeout"));
+    assert!(summary.contains("NAT-PMP: no gateway"));
+    assert!(summary.contains("UPnP: not supported"));
+}
+
+#[test]
+fn test_connectivity_result_summary_partial_success() {
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        external_port: 8080,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::PCP,
+        created_at_ms: 1234567890000,
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.ipv6 = StrategyAttempt::Failed("not available".to_string());
+    result.pcp = StrategyAttempt::Success(mapping.clone());
+    result.mapping = Some(mapping);
+
+    let summary = result.summary();
+
+    assert!(summary.contains("IPv6: not available"));
+    assert!(summary.contains("PCP: ok"));
+    assert!(summary.contains("NAT-PMP: not tried"));
+}
+
+#[test]
+fn test_connectivity_result_serialization() {
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        external_port: 8080,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::PCP,
+        created_at_ms: 1234567890000,
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.pcp = StrategyAttempt::Success(mapping.clone());
+    result.mapping = Some(mapping);
+
+    // Test JSON serialization
+    let json = serde_json::to_string(&result).unwrap();
+    let deserialized: ConnectivityResult = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(result, deserialized);
+}
+
+#[test]
+fn test_strategy_attempt_serialization() {
+    let success = StrategyAttempt::Success(PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+        external_port: 9999,
+        lifetime_secs: 7200,
+        protocol: MappingProtocol::UPnP,
+        created_at_ms: 9876543210,
+    });
+
+    let json = serde_json::to_string(&success).unwrap();
+    let deserialized: StrategyAttempt = serde_json::from_str(&json).unwrap();
+    assert_eq!(success, deserialized);
+
+    let failed = StrategyAttempt::Failed("test error".to_string());
+    let json = serde_json::to_string(&failed).unwrap();
+    let deserialized: StrategyAttempt = serde_json::from_str(&json).unwrap();
+    assert_eq!(failed, deserialized);
+
+    let not_attempted = StrategyAttempt::NotAttempted;
+    let json = serde_json::to_string(&not_attempted).unwrap();
+    let deserialized: StrategyAttempt = serde_json::from_str(&json).unwrap();
+    assert_eq!(not_attempted, deserialized);
+}
+
+#[test]
+fn test_is_ipv6_link_local() {
+    use std::net::Ipv6Addr;
+
+    // Link-local addresses (fe80::/10)
+    assert!(is_ipv6_link_local(&Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)));
+    assert!(is_ipv6_link_local(&Ipv6Addr::new(0xfea0, 0, 0, 0, 0, 0, 0, 1)));
+    assert!(is_ipv6_link_local(&Ipv6Addr::new(0xfebf, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff)));
+
+    // Not link-local
+    assert!(!is_ipv6_link_local(&Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+    assert!(!is_ipv6_link_local(&Ipv6Addr::LOCALHOST));
+    assert!(!is_ipv6_link_local(&Ipv6Addr::new(0xfe00, 0, 0, 0, 0, 0, 0, 1)));
+    assert!(!is_ipv6_link_local(&Ipv6Addr::new(0xfec0, 0, 0, 0, 0, 0, 0, 1)));
+}
+
+#[test]
+fn test_mapping_protocol_ipv6_variant() {
+    let protocol = MappingProtocol::IPv6;
+    assert_eq!(protocol, MappingProtocol::IPv6);
+
+    // Test serialization
+    let json = serde_json::to_string(&protocol).unwrap();
+    let deserialized: MappingProtocol = serde_json::from_str(&json).unwrap();
+    assert_eq!(protocol, deserialized);
+}
+
+// Note: Integration tests for establish_connectivity() would require network access
+// and mock servers. These should be in tests/integration_tests.rs with #[ignore]
+// attribute or run in a controlled test environment.
+//
+// Example integration test structure:
+//
+// #[tokio::test]
+// #[ignore] // Run manually or in CI with mock network
+// async fn test_establish_connectivity_all_protocols() {
+//     let result = establish_connectivity(8080).await;
+//     // Verify at least one protocol was attempted
+//     assert!(matches!(result.ipv6, StrategyAttempt::Failed(_) | StrategyAttempt::Success(_)));
+// }

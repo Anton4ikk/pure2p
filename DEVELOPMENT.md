@@ -48,14 +48,23 @@ src/
 ├── storage.rs          # Contacts, chats, AppState
 ├── queue.rs            # SQLite retry queue
 ├── messaging.rs        # High-level API
-├── connectivity.rs     # Port forwarding (PCP, NAT-PMP, UPnP)
+├── connectivity/       # NAT traversal (modular)
+│   ├── mod.rs          # Public API, re-exports
+│   ├── types.rs        # Common types (PortMappingResult, MappingError, etc.)
+│   ├── gateway.rs      # Cross-platform gateway discovery
+│   ├── pcp.rs          # PCP (Port Control Protocol, RFC 6887)
+│   ├── natpmp.rs       # NAT-PMP (RFC 6886)
+│   ├── upnp.rs         # UPnP IGD implementation
+│   ├── ipv6.rs         # IPv6 direct connectivity detection
+│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP
+│   └── manager.rs      # PortMappingManager, UpnpMappingManager
 ├── tui/                # TUI module (library)
 │   ├── mod.rs          # Module exports
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
 │   ├── app.rs          # App business logic
 │   └── ui.rs           # Rendering functions
-├── tests/              # Unit tests (233 tests)
+├── tests/              # Unit tests (285 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -83,10 +92,11 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (233 total)
+cargo test                     # All tests (285 total)
 cargo test --lib               # Library tests only
 cargo test crypto              # Specific module
-cargo test tui_tests           # TUI tests (90 tests)
+cargo test connectivity        # Connectivity module (26 tests)
+cargo test tui_tests           # TUI tests (113 tests)
 cargo test -- --nocapture      # Show output
 cargo test -- --test-threads=1 # Sequential (if needed)
 
@@ -130,15 +140,15 @@ git push origin feature/name
 
 ```
 src/tests/
-├── crypto_tests.rs      (7 tests)   - Keypair, signing, UID
-├── protocol_tests.rs    (10 tests)  - Envelopes, serialization
-├── transport_tests.rs   (26 tests)  - HTTP, peers, delivery
-├── storage_tests.rs     (51 tests)  - Tokens, AppState, Settings
-├── queue_tests.rs       (34 tests)  - SQLite queue, retries
-├── messaging_tests.rs   (17 tests)  - High-level messaging API
-├── connectivity_tests.rs (15 tests) - Port forwarding
-├── tui_tests.rs         (90 tests)  - All TUI screens/logic
-└── lib_tests.rs         (1 test)    - Library init
+├── crypto_tests.rs       (7 tests)   - Keypair, signing, UID
+├── protocol_tests.rs     (10 tests)  - Envelopes, serialization
+├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
+├── storage_tests.rs      (51 tests)  - Tokens, AppState, Settings
+├── queue_tests.rs        (34 tests)  - SQLite queue, retries
+├── messaging_tests.rs    (17 tests)  - High-level messaging API
+├── connectivity_tests.rs (26 tests)  - PCP, NAT-PMP, UPnP, IPv6, orchestrator
+├── tui_tests.rs          (113 tests) - All TUI screens/logic
+└── lib_tests.rs          (1 test)    - Library init
 ```
 
 **Benefits:**

@@ -132,6 +132,8 @@ Development timeline and planned features.
   - Network switching (WiFi ↔ Cellular)
   - Optimized for mobile constraints
 
+- **Voice Calls**
+
 ### Known Limits
 - No background reception (platform constraint)
 - No push (by design)
