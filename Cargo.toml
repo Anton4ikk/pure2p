@@ -55,6 +55,9 @@ bytes = "1.5"
 hex = "0.4"
 base64 = "0.22"
 
+# UPnP/IGD for port mapping
+igd-next = "0.14"
+
 # TUI dependencies
 ratatui = "0.26"
 crossterm = "0.27"

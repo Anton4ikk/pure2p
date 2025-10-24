@@ -33,6 +33,7 @@ enum Screen {
     ChatList,
     ChatView,
     Settings,
+    Diagnostics,
 }
 
 /// Main menu items
@@ -41,6 +42,7 @@ enum MenuItem {
     ChatList,
     ShareContact,
     ImportContact,
+    Diagnostics,
     Settings,
     Exit,
 }
@@ -51,6 +53,7 @@ impl MenuItem {
             Self::ChatList,
             Self::ShareContact,
             Self::ImportContact,
+            Self::Diagnostics,
             Self::Settings,
             Self::Exit,
         ]
@@ -61,6 +64,7 @@ impl MenuItem {
             Self::ChatList => "Chat List",
             Self::ShareContact => "Share Contact",
             Self::ImportContact => "Import Contact",
+            Self::Diagnostics => "Diagnostics",
             Self::Settings => "Settings",
             Self::Exit => "Exit",
         }
@@ -71,6 +75,7 @@ impl MenuItem {
             Self::ChatList => "View and manage your conversations",
             Self::ShareContact => "Generate and share your contact token",
             Self::ImportContact => "Import a contact from their token",
+            Self::Diagnostics => "View connectivity and network diagnostics",
             Self::Settings => "Configure application settings",
             Self::Exit => "Exit Pure2P",
         }
@@ -307,6 +312,57 @@ impl SettingsScreen {
     }
 }
 
+/// Diagnostics screen state
+struct DiagnosticsScreen {
+    /// PCP mapping status
+    pcp_status: Option<Result<pure2p::connectivity::PortMappingResult, String>>,
+    /// NAT-PMP mapping status
+    natpmp_status: Option<Result<pure2p::connectivity::PortMappingResult, String>>,
+    /// UPnP mapping status
+    upnp_status: Option<Result<pure2p::connectivity::PortMappingResult, String>>,
+    /// Whether diagnostics are being refreshed
+    is_refreshing: bool,
+    /// Status message
+    status_message: Option<String>,
+    /// Local port being tested
+    local_port: u16,
+}
+
+impl DiagnosticsScreen {
+    fn new(local_port: u16) -> Self {
+        Self {
+            pcp_status: None,
+            natpmp_status: None,
+            upnp_status: None,
+            is_refreshing: false,
+            status_message: None,
+            local_port,
+        }
+    }
+
+    fn set_pcp_status(&mut self, status: Result<pure2p::connectivity::PortMappingResult, String>) {
+        self.pcp_status = Some(status);
+    }
+
+    fn set_natpmp_status(&mut self, status: Result<pure2p::connectivity::PortMappingResult, String>) {
+        self.natpmp_status = Some(status);
+    }
+
+    fn set_upnp_status(&mut self, status: Result<pure2p::connectivity::PortMappingResult, String>) {
+        self.upnp_status = Some(status);
+        self.is_refreshing = false;
+    }
+
+    fn start_refresh(&mut self) {
+        self.is_refreshing = true;
+        self.status_message = Some("Refreshing diagnostics...".to_string());
+    }
+
+    fn set_status_message(&mut self, message: String) {
+        self.status_message = Some(message);
+    }
+}
+
 /// Startup Sync screen state
 struct StartupSyncScreen {
     /// Total pending messages to sync
@@ -499,6 +555,8 @@ struct App {
     chat_view_screen: Option<ChatViewScreen>,
     /// Settings screen (when active)
     settings_screen: Option<SettingsScreen>,
+    /// Diagnostics screen (when active)
+    diagnostics_screen: Option<DiagnosticsScreen>,
     /// Startup sync screen (when active)
     startup_sync_screen: Option<StartupSyncScreen>,
 }
@@ -532,6 +590,7 @@ impl App {
             chat_list_screen: None,
             chat_view_screen: None,
             settings_screen: None,
+            diagnostics_screen: None,
             startup_sync_screen,
         })
     }
@@ -563,6 +622,9 @@ impl App {
             MenuItem::ImportContact => {
                 self.show_import_contact_screen();
             }
+            MenuItem::Diagnostics => {
+                self.show_diagnostics_screen();
+            }
             MenuItem::Settings => {
                 self.show_settings_screen();
             }
@@ -592,6 +654,12 @@ impl App {
         self.current_screen = Screen::Settings;
     }
 
+    fn show_diagnostics_screen(&mut self) {
+        let default_port = 8080; // TODO: Get from actual listening port
+        self.diagnostics_screen = Some(DiagnosticsScreen::new(default_port));
+        self.current_screen = Screen::Diagnostics;
+    }
+
     fn back_to_main_menu(&mut self) {
         self.current_screen = Screen::MainMenu;
         self.share_contact_screen = None;
@@ -599,6 +667,7 @@ impl App {
         self.chat_list_screen = None;
         self.chat_view_screen = None;
         self.settings_screen = None;
+        self.diagnostics_screen = None;
     }
 
     fn back_to_chat_list(&mut self) {
@@ -963,6 +1032,26 @@ fn run_app<B: ratatui::backend::Backend>(
                             _ => {}
                         }
                     }
+                    Screen::Diagnostics => {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                                app.back_to_main_menu();
+                            }
+                            KeyCode::Char('r') | KeyCode::F(5) => {
+                                // Trigger PCP mapping test
+                                if let Some(screen) = &mut app.diagnostics_screen {
+                                    screen.start_refresh();
+                                    let port = screen.local_port;
+                                    // Spawn async task to test PCP mapping
+                                    tokio::spawn(async move {
+                                        // This will run in background
+                                        // For now, we'll handle this in the main loop
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -982,6 +1071,7 @@ fn ui(f: &mut Frame, app: &App) {
         Screen::ChatList => render_chat_list(f, app),
         Screen::ChatView => render_chat_view(f, app),
         Screen::Settings => render_settings(f, app),
+        Screen::Diagnostics => render_diagnostics(f, app),
     }
 }
 
@@ -1784,6 +1874,301 @@ fn render_settings(f: &mut Frame, app: &App) {
     }
 }
 
+fn render_diagnostics(f: &mut Frame, app: &App) {
+    let size = f.size();
+
+    if let Some(screen) = &app.diagnostics_screen {
+        // Create layout
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(2)
+            .constraints([
+                Constraint::Length(3),  // Title
+                Constraint::Length(7),  // PCP status
+                Constraint::Length(5),  // NAT-PMP status
+                Constraint::Length(5),  // UPnP status
+                Constraint::Min(3),     // Additional info
+                Constraint::Length(3),  // Help text
+            ])
+            .split(size);
+
+        // Title
+        let title = Paragraph::new("Network Diagnostics & Port Mapping")
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL));
+        f.render_widget(title, chunks[0]);
+
+        // PCP Status
+        let pcp_text = if let Some(result) = &screen.pcp_status {
+            match result {
+                Ok(mapping) => {
+                    vec![
+                        Line::from(Span::styled(
+                            "PCP: ✓ Success",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("External IP: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_ip),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("External Port: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_port),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Lifetime: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}s", mapping.lifetime_secs),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                    ]
+                }
+                Err(e) => {
+                    vec![
+                        Line::from(Span::styled(
+                            "PCP: ✗ Failed",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            format!("Error: {}", e),
+                            Style::default().fg(Color::Red),
+                        )),
+                    ]
+                }
+            }
+        } else if screen.is_refreshing {
+            vec![
+                Line::from(Span::styled(
+                    "PCP: Testing...",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Attempting to create port mapping...",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled(
+                    "PCP: Not tested",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press 'r' or F5 to test connectivity",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
+
+        let pcp_widget = Paragraph::new(pcp_text)
+            .alignment(Alignment::Left)
+            .block(Block::default().borders(Borders::ALL).title("Port Control Protocol (PCP)"));
+        f.render_widget(pcp_widget, chunks[1]);
+
+        // NAT-PMP Status
+        let natpmp_text = if let Some(result) = &screen.natpmp_status {
+            match result {
+                Ok(mapping) => {
+                    vec![
+                        Line::from(Span::styled(
+                            "NAT-PMP: ✓ Success",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("External IP: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_ip),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("External Port: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_port),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Lifetime: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}s", mapping.lifetime_secs),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                    ]
+                }
+                Err(e) => {
+                    vec![
+                        Line::from(Span::styled(
+                            "NAT-PMP: ✗ Failed",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            format!("Error: {}", e),
+                            Style::default().fg(Color::Red),
+                        )),
+                    ]
+                }
+            }
+        } else if screen.is_refreshing && screen.pcp_status.is_some() {
+            vec![
+                Line::from(Span::styled(
+                    "NAT-PMP: Testing...",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Attempting NAT-PMP fallback...",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled(
+                    "NAT-PMP: Not tested",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Fallback protocol (tested after PCP)",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
+
+        let natpmp_widget = Paragraph::new(natpmp_text)
+            .alignment(Alignment::Left)
+            .block(Block::default().borders(Borders::ALL).title("NAT Port Mapping Protocol (NAT-PMP)"));
+        f.render_widget(natpmp_widget, chunks[2]);
+
+        // UPnP Status
+        let upnp_text = if let Some(result) = &screen.upnp_status {
+            match result {
+                Ok(mapping) => {
+                    let renew_mins = (mapping.lifetime_secs as f64 * 0.8 / 60.0) as u32;
+                    vec![
+                        Line::from(Span::styled(
+                            "UPnP: ✓ Success",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("External IP: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_ip),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("External Port: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_port),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Lifetime: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}s (renews in {} min)", mapping.lifetime_secs, renew_mins),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                    ]
+                }
+                Err(e) => {
+                    vec![
+                        Line::from(Span::styled(
+                            "UPnP: ✗ Failed",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            format!("Error: {}", e),
+                            Style::default().fg(Color::Red),
+                        )),
+                    ]
+                }
+            }
+        } else if screen.is_refreshing && screen.natpmp_status.is_some() {
+            vec![
+                Line::from(Span::styled(
+                    "UPnP: Testing...",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Attempting UPnP fallback...",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled(
+                    "UPnP: Not tested",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Final fallback protocol (tested after NAT-PMP)",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
+
+        let upnp_widget = Paragraph::new(upnp_text)
+            .alignment(Alignment::Left)
+            .block(Block::default().borders(Borders::ALL).title("Universal Plug and Play (UPnP)"));
+        f.render_widget(upnp_widget, chunks[3]);
+
+        // Additional info
+        let info_text = vec![
+            Line::from(vec![
+                Span::styled("Local Port: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}", screen.local_port),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Port mapping allows peers to connect to you directly",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        let info_widget = Paragraph::new(info_text)
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title("Info"));
+        f.render_widget(info_widget, chunks[4]);
+
+        // Help text
+        let help_text = "r/F5: Refresh | b/Esc: Back | q: Quit";
+        let help = Paragraph::new(help_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL));
+        f.render_widget(help, chunks[5]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1974,8 +2359,8 @@ mod tests {
         );
         assert_eq!(
             app.menu_items.len(),
-            5,
-            "Should have 5 menu items"
+            6,
+            "Should have 6 menu items"
         );
     }
 
@@ -1993,6 +2378,8 @@ mod tests {
         assert_eq!(app.selected_index, 3);
         app.next();
         assert_eq!(app.selected_index, 4);
+        app.next();
+        assert_eq!(app.selected_index, 5);
 
         // Test wrap around
         app.next();
@@ -2000,9 +2387,9 @@ mod tests {
 
         // Test previous navigation
         app.previous();
-        assert_eq!(app.selected_index, 4, "Should wrap to end");
+        assert_eq!(app.selected_index, 5, "Should wrap to end");
         app.previous();
-        assert_eq!(app.selected_index, 3);
+        assert_eq!(app.selected_index, 4);
     }
 
     #[test]
@@ -2094,8 +2481,8 @@ mod tests {
     fn test_app_select_exit() {
         let mut app = App::new().expect("Failed to create app");
 
-        // Navigate to Exit item (index 4)
-        app.selected_index = 4;
+        // Navigate to Exit item (index 5)
+        app.selected_index = 5;
         assert_eq!(app.selected_item(), MenuItem::Exit);
         assert!(!app.should_quit);
 
@@ -2537,11 +2924,15 @@ mod tests {
             "View and manage your conversations"
         );
 
-        // Verify menu has 5 items now
+        // Verify menu has 6 items now (added Diagnostics)
         let items = MenuItem::all();
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 6);
         assert_eq!(items[0], MenuItem::ChatList);
         assert_eq!(items[1], MenuItem::ShareContact);
+        assert_eq!(items[2], MenuItem::ImportContact);
+        assert_eq!(items[3], MenuItem::Diagnostics);
+        assert_eq!(items[4], MenuItem::Settings);
+        assert_eq!(items[5], MenuItem::Exit);
     }
 
     #[test]
@@ -3179,8 +3570,8 @@ mod tests {
     fn test_app_select_settings() {
         let mut app = App::new().expect("Failed to create app");
 
-        // Navigate to Settings item (index 3)
-        app.selected_index = 3;
+        // Navigate to Settings item (index 4)
+        app.selected_index = 4;
         assert_eq!(app.selected_item(), MenuItem::Settings);
 
         // Trigger selection
