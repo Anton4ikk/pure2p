@@ -9,6 +9,7 @@
 use crate::{Error, Result};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ring::digest::{Context, SHA256};
+use x25519_dalek::PublicKey as X25519PublicKey;
 
 /// Unique identifier derived from public key fingerprint
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -45,19 +46,24 @@ impl std::fmt::Display for UID {
 /// Represents a cryptographic key pair
 #[derive(Debug)]
 pub struct KeyPair {
-    /// Public key
+    /// Ed25519 public key (for signing/verification)
     pub public_key: Vec<u8>,
-    /// Private key (should be kept secure)
-    private_key: Vec<u8>,
-    /// Unique identifier derived from public key
+    /// Ed25519 private key (should be kept secure)
+    pub(crate) private_key: Vec<u8>,
+    /// X25519 public key (for key exchange)
+    pub x25519_public: Vec<u8>,
+    /// X25519 private key (should be kept secure)
+    pub(crate) x25519_secret: Vec<u8>,
+    /// Unique identifier derived from Ed25519 public key
     pub uid: UID,
 }
 
 impl KeyPair {
-    /// Generate a new Ed25519 key pair
+    /// Generate a new key pair (Ed25519 for signing + X25519 for key exchange)
     pub fn generate() -> Result<Self> {
         use rand::rngs::OsRng;
 
+        // Generate Ed25519 keypair for signing/verification
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
 
@@ -65,9 +71,21 @@ impl KeyPair {
         let public_key = verifying_key.to_bytes().to_vec();
         let uid = UID::from_public_key(&public_key);
 
+        // Generate X25519 keypair for key exchange
+        // Generate 32 random bytes for the secret key
+        let mut x25519_secret_bytes = [0u8; 32];
+        use rand::RngCore;
+        OsRng.fill_bytes(&mut x25519_secret_bytes);
+
+        // Derive public key from secret: public = basepoint * secret
+        let x25519_public_bytes = x25519_dalek::x25519(x25519_secret_bytes, x25519_dalek::X25519_BASEPOINT_BYTES);
+        let x25519_public = X25519PublicKey::from(x25519_public_bytes);
+
         Ok(KeyPair {
             public_key,
             private_key,
+            x25519_public: x25519_public.to_bytes().to_vec(),
+            x25519_secret: x25519_secret_bytes.to_vec(),
             uid,
         })
     }
@@ -108,6 +126,58 @@ impl KeyPair {
     pub fn uid(&self) -> &UID {
         &self.uid
     }
+
+    /// Derive a shared secret with a remote peer's X25519 public key
+    pub fn derive_shared_secret(&self, remote_x25519_public: &[u8; 32]) -> Result<[u8; 32]> {
+        let local_secret_bytes: [u8; 32] = self.x25519_secret.as_slice()
+            .try_into()
+            .map_err(|_| Error::Crypto("Invalid X25519 secret key length".to_string()))?;
+
+        let remote_public = X25519PublicKey::from(*remote_x25519_public);
+
+        // Perform the scalar multiplication: local_secret * remote_public
+        let shared_secret = diffie_hellman(&local_secret_bytes, remote_public.as_bytes());
+
+        Ok(shared_secret)
+    }
+}
+
+/// Internal helper: Perform X25519 Diffie-Hellman
+fn diffie_hellman(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
+    // x25519 function performs the scalar multiplication with proper clamping
+    x25519_dalek::x25519(*secret, *public)
+}
+
+/// Derive a shared secret using X25519 ECDH
+///
+/// This function performs Diffie-Hellman key exchange using the X25519 elliptic curve.
+/// The resulting shared secret can be used as a base key for AEAD encryption.
+///
+/// # Arguments
+///
+/// * `local_priv` - Local X25519 private key (32 bytes)
+/// * `remote_pub` - Remote X25519 public key (32 bytes)
+///
+/// # Returns
+///
+/// A 32-byte shared secret derived from the key exchange
+///
+/// # Example
+///
+/// ```
+/// use pure2p::crypto::derive_shared_secret;
+///
+/// # fn example() -> pure2p::Result<()> {
+/// let alice_secret = [1u8; 32];
+/// let bob_public = [2u8; 32];
+///
+/// let shared_secret = derive_shared_secret(&alice_secret, &bob_public);
+/// assert_eq!(shared_secret.len(), 32);
+/// # Ok(())
+/// # }
+/// ```
+pub fn derive_shared_secret(local_priv: &[u8; 32], remote_pub: &[u8; 32]) -> [u8; 32] {
+    diffie_hellman(local_priv, remote_pub)
 }
 
 /// Encrypt data using a shared secret
@@ -122,109 +192,3 @@ pub fn decrypt(_data: &[u8], _key: &[u8]) -> Result<Vec<u8>> {
     Err(Error::Crypto("Not yet implemented".to_string()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_keypair_generation() {
-        // Test that we can generate a keypair
-        let keypair = KeyPair::generate().expect("Failed to generate keypair");
-
-        // Ed25519 public keys are 32 bytes
-        assert_eq!(keypair.public_key.len(), 32);
-        // Ed25519 private keys are 32 bytes
-        assert_eq!(keypair.private_key.len(), 32);
-        // UID should be 32 hex characters (16 bytes)
-        assert_eq!(keypair.uid.as_str().len(), 32);
-    }
-
-    #[test]
-    fn test_uid_consistency() {
-        // Generate a keypair
-        let keypair = KeyPair::generate().expect("Failed to generate keypair");
-
-        // Derive UID from public key multiple times
-        let uid1 = UID::from_public_key(&keypair.public_key);
-        let uid2 = UID::from_public_key(&keypair.public_key);
-
-        // UIDs should be identical
-        assert_eq!(uid1, uid2);
-        assert_eq!(keypair.uid, uid1);
-    }
-
-    #[test]
-    fn test_uid_uniqueness() {
-        // Generate two different keypairs
-        let keypair1 = KeyPair::generate().expect("Failed to generate keypair 1");
-        let keypair2 = KeyPair::generate().expect("Failed to generate keypair 2");
-
-        // Their UIDs should be different
-        assert_ne!(keypair1.uid, keypair2.uid);
-        // Their public keys should be different
-        assert_ne!(keypair1.public_key, keypair2.public_key);
-    }
-
-    #[test]
-    fn test_sign_and_verify() {
-        let keypair = KeyPair::generate().expect("Failed to generate keypair");
-        let message = b"Hello, Pure2P!";
-
-        // Sign the message
-        let signature = keypair.sign(message).expect("Failed to sign message");
-
-        // Signature should be 64 bytes (Ed25519 signature size)
-        assert_eq!(signature.len(), 64);
-
-        // Verify the signature
-        let is_valid = keypair
-            .verify(message, &signature)
-            .expect("Failed to verify signature");
-        assert!(is_valid);
-    }
-
-    #[test]
-    fn test_verify_invalid_signature() {
-        let keypair = KeyPair::generate().expect("Failed to generate keypair");
-        let message = b"Hello, Pure2P!";
-        let wrong_message = b"Wrong message!";
-
-        // Sign the original message
-        let signature = keypair.sign(message).expect("Failed to sign message");
-
-        // Verify with wrong message should fail
-        let is_valid = keypair
-            .verify(wrong_message, &signature)
-            .expect("Failed to verify signature");
-        assert!(!is_valid);
-    }
-
-    #[test]
-    fn test_verify_corrupted_signature() {
-        let keypair = KeyPair::generate().expect("Failed to generate keypair");
-        let message = b"Hello, Pure2P!";
-
-        // Sign the message
-        let mut signature = keypair.sign(message).expect("Failed to sign message");
-
-        // Corrupt the signature
-        signature[0] ^= 0xFF;
-
-        // Verify should fail
-        let is_valid = keypair
-            .verify(message, &signature)
-            .expect("Failed to verify signature");
-        assert!(!is_valid);
-    }
-
-    #[test]
-    fn test_uid_display() {
-        let keypair = KeyPair::generate().expect("Failed to generate keypair");
-        let uid_string = format!("{}", keypair.uid);
-
-        // Should format as a hex string
-        assert_eq!(uid_string, keypair.uid.as_str());
-        // Should be all lowercase hex
-        assert!(uid_string.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-}

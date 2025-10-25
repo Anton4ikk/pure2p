@@ -75,7 +75,7 @@ Alice's Client          Bob's Client
 4. **Retry** when Bob comes online
 
 ### Key Tech
-- **Crypto**: Ed25519 keypairs, SHA-256 UIDs
+- **Crypto**: Ed25519 (signing/identity), X25519 (key exchange), SHA-256 UIDs, ECDH shared secrets
 - **Protocol**: CBOR message envelopes
 - **Transport**: HTTP/1.1 (`/output`, `/ping`, `/message`)
 - **Queue**: SQLite with retry backoff
@@ -93,21 +93,33 @@ Alice's Client          Bob's Client
 | **Android** | 🔄 | Core ready, GUI pending |
 | **iOS** | 🔄 | Core ready, GUI pending |
 
-**Planned:** NAT Traversal (v0.3) • Desktop apps (v0.4) • Mobile apps (v0.5)
+**Planned:** NAT Traversal, E2E Encryption (v0.3) • Desktop apps (v0.4) • Mobile apps (v0.5)
 
 See [ROADMAP.md](ROADMAP.md) for timeline.
 
 ---
 
-## 🎯 Status (v0.2 - In Progress)
+## 🎯 Status (v0.3 - In Progress)
 
 ### Implemented ✅
 
 **Core:**
-- Ed25519 keypairs, UID generation
+- Ed25519 keypairs (signing/identity), X25519 keypairs (key exchange)
+- ECDH shared secret derivation (encryption-ready)
+- SHA-256 UID generation from Ed25519 pubkeys
 - CBOR serialization, HTTP transport
 - SQLite queue with retry
-- Contact tokens, state persistence
+- Contact tokens with dual pubkeys (Ed25519 + X25519)
+- State persistence
+
+**NAT Traversal:**
+- IPv6 direct connectivity detection
+- PCP (Port Control Protocol, RFC 6887) with auto-renewal
+- NAT-PMP (RFC 6886) with external IP detection
+- UPnP IGD with auto-cleanup
+- CGNAT detection (RFC 6598, 100.64.0.0/10)
+- Automatic fallback orchestration (IPv6 → PCP → NAT-PMP → UPnP)
+- Cross-platform gateway discovery (Linux, macOS, Windows)
 
 **TUI:**
 - Contact share/import with validation
@@ -116,13 +128,19 @@ See [ROADMAP.md](ROADMAP.md) for timeline.
 - Delete with confirmation
 - Settings with auto-save
 - Startup sync progress
+- Diagnostics screen (port forwarding status, CGNAT warnings)
+
+### In Progress 🔄
+
+- End-to-end message encryption (using X25519 shared secrets)
+- Message authentication/signing
 
 ### Limitations ⚠️
 
-- No encryption (plaintext) — v0.3
-- No NAT traversal — v0.3
+- Messages currently unencrypted (E2E encryption in progress)
 - Text only — rich media in v0.4
 - Manual peer management
+- CGNAT users need relay (future consideration)
 
 **This is a prototype.** See [ROADMAP.md](ROADMAP.md) for planned features.
 

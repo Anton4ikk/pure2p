@@ -12,6 +12,11 @@ pub mod transport;
 pub mod storage;
 pub mod queue;
 pub mod messaging;
+pub mod connectivity;
+pub mod tui;
+
+#[cfg(test)]
+mod tests;
 
 /// Result type alias for Pure2P operations
 pub type Result<T> = std::result::Result<T, Error>;
@@ -54,18 +59,13 @@ pub enum Error {
     /// HTTP/Hyper error
     #[error("HTTP error: {0}")]
     Http(#[from] hyper::Error),
+
+    /// Port mapping error
+    #[error("Port mapping error: {0}")]
+    PortMapping(#[from] connectivity::MappingError),
 }
 
 /// Initialize the Pure2P library with logging
 pub fn init() {
     tracing_subscriber::fmt::init();
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_library_init() {
-        // Basic test to ensure library compiles
-        assert!(true);
-    }
 }
