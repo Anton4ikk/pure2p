@@ -91,10 +91,19 @@ src/
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (121 tests)
+│   └── tui_tests/      # TUI module tests (125 tests)
 │       ├── mod.rs
 │       ├── app_tests.rs
-│       ├── screens_tests.rs  # Includes enhanced diagnostics tests
+│       ├── screen_tests/     # Modularized screen tests (82 tests)
+│       │   ├── mod.rs
+│       │   ├── share_contact_tests.rs
+│       │   ├── import_contact_tests.rs
+│       │   ├── chat_list_tests.rs
+│       │   ├── chat_view_tests.rs
+│       │   ├── settings_tests.rs
+│       │   ├── startup_sync_tests.rs
+│       │   ├── diagnostics_tests.rs
+│       │   └── status_indicators_tests.rs
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
@@ -114,7 +123,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (301 total)
+cargo test                     # All tests (305 total)
 
 # Quality
 cargo fmt                      # Format
@@ -169,21 +178,31 @@ src/tests/
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
 │   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (121 tests) - Organized by TUI components
+└── tui_tests/            (125 tests) - Organized by TUI components
     ├── app_tests.rs      (36 tests)  - App business logic
-    ├── screens_tests.rs  (82 tests)  - All screens + enhanced Diagnostics (IPv4/IPv6, external endpoint, RTT, queue size)
+    ├── screen_tests/     (82 tests)  - Modularized by screen type
+    │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
+    │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
+    │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen
+    │   ├── chat_view_tests.rs        (3 tests)   - ChatViewScreen
+    │   ├── settings_tests.rs         (9 tests)   - SettingsScreen
+    │   ├── startup_sync_tests.rs     (10 tests)  - StartupSyncScreen
+    │   ├── diagnostics_tests.rs      (20 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT)
+    │   └── status_indicators_tests.rs (10 tests) - Status badges and contact expiry
     ├── types_tests.rs    (3 tests)   - MenuItem enum
     └── ui_tests.rs       (4 tests)   - UI helper functions (format_duration_until)
 ```
 
 **Run specific tests:**
 ```bash
-cargo test --lib                  # All library tests
-cargo test crypto_tests           # Crypto tests
-cargo test storage_tests          # All storage tests
-cargo test tui_tests              # All TUI tests
-cargo test storage_tests::contact # Just contact tests
-cargo test tui_tests::app         # Just app tests
+cargo test --lib                        # All library tests
+cargo test crypto_tests                 # Crypto tests
+cargo test storage_tests                # All storage tests
+cargo test tui_tests                    # All TUI tests
+cargo test storage_tests::contact       # Just contact tests
+cargo test tui_tests::app               # Just app tests
+cargo test tui_tests::screen_tests      # All screen tests
+cargo test screen_tests::diagnostics    # Just diagnostics tests
 ```
 
 ---

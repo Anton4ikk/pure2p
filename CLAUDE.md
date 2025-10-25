@@ -212,13 +212,22 @@ cargo fmt
 - `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
 - `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
-**`tui_tests/` (121 tests):**
+**`tui_tests/` (125 tests):**
 - `app_tests.rs` (36 tests) - App struct and business logic
-- `screens_tests.rs` (82 tests) - All screens (ShareContact, ImportContact, ChatList, ChatView, Settings, StartupSync, Diagnostics with new fields: IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size)
+- `screen_tests/` (82 tests) - All screens, modularized by screen type:
+  - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
+  - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)
+  - `chat_list_tests.rs` (5 tests) - ChatListScreen (navigation, delete popup)
+  - `chat_view_tests.rs` (3 tests) - ChatViewScreen (input, scrolling)
+  - `settings_tests.rs` (9 tests) - SettingsScreen (validation, persistence)
+  - `startup_sync_tests.rs` (10 tests) - StartupSyncScreen (progress tracking)
+  - `diagnostics_tests.rs` (20 tests) - DiagnosticsScreen (IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size, CGNAT)
+  - `status_indicators_tests.rs` (10 tests) - Status badges and contact expiry
+  - `mod.rs` - Module organization
 - `types_tests.rs` (3 tests) - MenuItem enum
 - `ui_tests.rs` (4 tests) - UI helper functions (format_duration_until)
 
-**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files) for maintainability.
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files) for maintainability. Screen tests are modularized in `screen_tests/` subdirectory for easier navigation and maintenance.
 
 ## Dependencies
 
