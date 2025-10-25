@@ -94,6 +94,19 @@ fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Enter => {
                                 app.select();
                             }
+                            // Quick access hotkeys
+                            KeyCode::Char('n') => {
+                                app.show_diagnostics_screen();
+                            }
+                            KeyCode::Char('c') => {
+                                app.show_chat_list_screen();
+                            }
+                            KeyCode::Char('s') => {
+                                app.show_share_contact_screen();
+                            }
+                            KeyCode::Char('i') => {
+                                app.show_import_contact_screen();
+                            }
                             _ => {}
                         }
                     }

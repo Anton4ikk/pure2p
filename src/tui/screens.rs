@@ -402,6 +402,16 @@ pub struct DiagnosticsScreen {
     pub status_message: Option<String>,
     /// Local port being tested
     pub local_port: u16,
+    /// IPv4 address detected
+    pub ipv4_address: Option<String>,
+    /// IPv6 address detected
+    pub ipv6_address: Option<String>,
+    /// External endpoint (IP:Port from successful mapping)
+    pub external_endpoint: Option<String>,
+    /// Last ping round-trip time in milliseconds
+    pub last_ping_rtt_ms: Option<u64>,
+    /// Number of messages in queue
+    pub queue_size: usize,
 }
 
 impl DiagnosticsScreen {
@@ -415,6 +425,11 @@ impl DiagnosticsScreen {
             is_refreshing: false,
             status_message: None,
             local_port,
+            ipv4_address: None,
+            ipv6_address: None,
+            external_endpoint: None,
+            last_ping_rtt_ms: None,
+            queue_size: 0,
         }
     }
 
@@ -448,6 +463,81 @@ impl DiagnosticsScreen {
     /// Set CGNAT detection status
     pub fn set_cgnat_detected(&mut self, detected: bool) {
         self.cgnat_detected = detected;
+    }
+
+    /// Set IPv4 address
+    pub fn set_ipv4_address(&mut self, address: Option<String>) {
+        self.ipv4_address = address;
+    }
+
+    /// Set IPv6 address
+    pub fn set_ipv6_address(&mut self, address: Option<String>) {
+        self.ipv6_address = address;
+    }
+
+    /// Set external endpoint
+    pub fn set_external_endpoint(&mut self, endpoint: Option<String>) {
+        self.external_endpoint = endpoint;
+    }
+
+    /// Set last ping RTT
+    pub fn set_last_ping_rtt(&mut self, rtt_ms: Option<u64>) {
+        self.last_ping_rtt_ms = rtt_ms;
+    }
+
+    /// Set queue size
+    pub fn set_queue_size(&mut self, size: usize) {
+        self.queue_size = size;
+    }
+
+    /// Calculate remaining lifetime seconds for the active mapping
+    pub fn get_remaining_lifetime_secs(&self) -> Option<i64> {
+        let mapping = if let Some(Ok(m)) = &self.pcp_status {
+            Some(m)
+        } else if let Some(Ok(m)) = &self.natpmp_status {
+            Some(m)
+        } else if let Some(Ok(m)) = &self.upnp_status {
+            Some(m)
+        } else {
+            None
+        }?;
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let elapsed_secs = ((now_ms - mapping.created_at_ms) / 1000).max(0);
+        let remaining_secs = (mapping.lifetime_secs as i64) - elapsed_secs;
+
+        Some(remaining_secs.max(0))
+    }
+
+    /// Calculate time until renewal (80% of lifetime)
+    pub fn get_renewal_countdown_secs(&self) -> Option<i64> {
+        let mapping = if let Some(Ok(m)) = &self.pcp_status {
+            Some(m)
+        } else if let Some(Ok(m)) = &self.natpmp_status {
+            Some(m)
+        } else if let Some(Ok(m)) = &self.upnp_status {
+            Some(m)
+        } else {
+            None
+        }?;
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let elapsed_secs = ((now_ms - mapping.created_at_ms) / 1000).max(0);
+        let renewal_threshold_secs = ((mapping.lifetime_secs as f64) * 0.8) as i64;
+        let countdown_secs = renewal_threshold_secs - elapsed_secs;
+
+        Some(countdown_secs.max(0))
+    }
+
+    /// Format remaining time as human-readable string
+    pub fn format_time_remaining(secs: i64) -> String {
+        if secs >= 3600 {
+            format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+        } else if secs >= 60 {
+            format!("{}m {}s", secs / 60, secs % 60)
+        } else {
+            format!("{}s", secs)
+        }
     }
 
     /// Update diagnostics from ConnectivityResult
@@ -492,6 +582,18 @@ impl DiagnosticsScreen {
                 self.upnp_status = Some(Err(e.clone()));
             }
             crate::connectivity::StrategyAttempt::NotAttempted => {}
+        }
+
+        // Update external endpoint from successful mapping
+        if let Some(mapping) = &result.mapping {
+            self.external_endpoint = Some(format!("{}:{}", mapping.external_ip, mapping.external_port));
+
+            // Detect IPv4/IPv6 from external IP
+            if mapping.external_ip.is_ipv4() {
+                self.ipv4_address = Some(mapping.external_ip.to_string());
+            } else if mapping.external_ip.is_ipv6() {
+                self.ipv6_address = Some(mapping.external_ip.to_string());
+            }
         }
 
         self.is_refreshing = false;

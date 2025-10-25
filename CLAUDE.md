@@ -77,20 +77,36 @@ cargo fmt
 
 **Library (`src/tui/`)** - Reusable UI logic:
 - Used by TUI binary, future mobile/desktop UIs
-- Fully tested (90 unit tests)
+- Fully tested (301 unit tests)
 - Platform-agnostic business logic
+- Modular UI rendering (`ui/` directory with per-screen modules)
+
+**UI Module Structure (`src/tui/ui/`):**
+- `mod.rs` - Main `ui()` dispatcher and re-exports
+- `startup_sync.rs` - Startup sync progress screen
+- `main_menu.rs` - Main menu with hotkey navigation (c/s/i/n)
+- `share_contact.rs` - Contact token generation screen
+- `import_contact.rs` - Contact token import screen
+- `chat_list.rs` - Chat list with delete confirmation popup
+- `chat_view.rs` - Individual chat conversation view
+- `settings.rs` - Settings configuration screen
+- `diagnostics.rs` - Network diagnostics (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size)
+- `helpers.rs` - Shared UI utilities (`format_duration_until`)
 
 **Screens:**
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time)
-2. **MainMenu** - Navigate features (↑↓/j/k, Enter)
-3. **ShareContact** - Generate tokens (copy/save), shows UID/IP
-4. **ImportContact** - Parse/validate tokens, expiry check
+2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n)
+3. **ShareContact** - Generate tokens (copy/save), shows UID/IP, expiry countdown
+4. **ImportContact** - Parse/validate tokens, expiry check, signature verification
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
-6. **ChatView** - Message history (scroll ↑↓), send with Enter
+6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
-8. **Diagnostics** - Port forwarding status (PCP, NAT-PMP, UPnP), CGNAT detection warning
+8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection
 
-**Keyboard:** q/Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
+**Keyboard:**
+- Global: q/Esc=back/quit, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
+- Main menu: c=chats, s=share, i=import, n=diagnostics
+- Diagnostics: r/F5=refresh
 
 **Colors:** Cyan=titles, Green=success/active, Yellow=warning/pending, Red=error/expired, Gray=inactive
 
@@ -175,7 +191,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (297 total tests)
+- All tests in `src/tests/` directory (301 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -196,13 +212,13 @@ cargo fmt
 - `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
 - `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
-**`tui_tests/` (117 tests):**
+**`tui_tests/` (121 tests):**
 - `app_tests.rs` (36 tests) - App struct and business logic
-- `screens_tests.rs` (69 tests) - All screens (ShareContact, ImportContact, ChatList, ChatView, Settings, StartupSync, Diagnostics)
+- `screens_tests.rs` (82 tests) - All screens (ShareContact, ImportContact, ChatList, ChatView, Settings, StartupSync, Diagnostics with new fields: IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size)
 - `types_tests.rs` (3 tests) - MenuItem enum
 - `ui_tests.rs` (4 tests) - UI helper functions (format_duration_until)
 
-**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`.
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files) for maintainability.
 
 ## Dependencies
 

@@ -64,8 +64,18 @@ src/
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
 │   ├── app.rs          # App business logic
-│   └── ui.rs           # Rendering functions
-├── tests/              # Unit tests (297 tests)
+│   └── ui/             # Modular rendering (10 files)
+│       ├── mod.rs      # Main ui() dispatcher
+│       ├── startup_sync.rs
+│       ├── main_menu.rs
+│       ├── share_contact.rs
+│       ├── import_contact.rs
+│       ├── chat_list.rs
+│       ├── chat_view.rs
+│       ├── settings.rs
+│       ├── diagnostics.rs
+│       └── helpers.rs
+├── tests/              # Unit tests (301 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -81,10 +91,10 @@ src/
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (117 tests)
+│   └── tui_tests/      # TUI module tests (121 tests)
 │       ├── mod.rs
 │       ├── app_tests.rs
-│       ├── screens_tests.rs
+│       ├── screens_tests.rs  # Includes enhanced diagnostics tests
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
@@ -104,7 +114,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (297 total)
+cargo test                     # All tests (301 total)
 
 # Quality
 cargo fmt                      # Format
@@ -159,11 +169,11 @@ src/tests/
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
 │   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (117 tests) - Organized by TUI components
+└── tui_tests/            (121 tests) - Organized by TUI components
     ├── app_tests.rs      (36 tests)  - App business logic
-    ├── screens_tests.rs  (69 tests)  - All screens (ShareContact, ImportContact, etc.)
+    ├── screens_tests.rs  (82 tests)  - All screens + enhanced Diagnostics (IPv4/IPv6, external endpoint, RTT, queue size)
     ├── types_tests.rs    (3 tests)   - MenuItem enum
-    └── ui_tests.rs       (4 tests)   - UI helper functions
+    └── ui_tests.rs       (4 tests)   - UI helper functions (format_duration_until)
 ```
 
 **Run specific tests:**
