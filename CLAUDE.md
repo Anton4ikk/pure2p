@@ -29,13 +29,13 @@ cargo fmt
 
 ## Core Modules
 
-**`crypto`** - Ed25519 keypairs (signing/verification), X25519 keypairs (key exchange), SHA-256 UID generation, ECDH shared secret derivation
+**`crypto`** - Ed25519 keypairs (signing/verification), X25519 keypairs (key exchange), SHA-256 UID generation, ECDH shared secret derivation, XChaCha20-Poly1305 AEAD encryption, Ed25519 token signing
 
-**`protocol`** - CBOR/JSON message envelopes with UUID, version, timestamps, message types (Text, Delete)
+**`protocol`** - CBOR/JSON message envelopes with UUID, version, timestamps, message types (Text, Delete), E2E encryption support (encrypted flag + ciphertext)
 
 **`transport`** - HTTP/1.1 server with `/output`, `/ping`, `/message` endpoints. Peer management, delivery tracking.
 
-**`storage`** - Contact/Chat structures, token generation (base64 CBOR), AppState persistence (JSON/CBOR), Settings with auto-save
+**`storage`** - Contact/Chat structures, signed contact token generation (base64 CBOR + Ed25519 signature), AppState persistence (JSON/CBOR), Settings with auto-save
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
 
@@ -77,20 +77,36 @@ cargo fmt
 
 **Library (`src/tui/`)** - Reusable UI logic:
 - Used by TUI binary, future mobile/desktop UIs
-- Fully tested (90 unit tests)
+- Fully tested (301 unit tests)
 - Platform-agnostic business logic
+- Modular UI rendering (`ui/` directory with per-screen modules)
+
+**UI Module Structure (`src/tui/ui/`):**
+- `mod.rs` - Main `ui()` dispatcher and re-exports
+- `startup_sync.rs` - Startup sync progress screen
+- `main_menu.rs` - Main menu with hotkey navigation (c/s/i/n)
+- `share_contact.rs` - Contact token generation screen
+- `import_contact.rs` - Contact token import screen
+- `chat_list.rs` - Chat list with delete confirmation popup
+- `chat_view.rs` - Individual chat conversation view
+- `settings.rs` - Settings configuration screen
+- `diagnostics.rs` - Network diagnostics (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size)
+- `helpers.rs` - Shared UI utilities (`format_duration_until`)
 
 **Screens:**
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time)
-2. **MainMenu** - Navigate features (↑↓/j/k, Enter)
-3. **ShareContact** - Generate tokens (copy/save), shows UID/IP
-4. **ImportContact** - Parse/validate tokens, expiry check
+2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n)
+3. **ShareContact** - Generate tokens (copy/save), shows UID/IP, expiry countdown
+4. **ImportContact** - Parse/validate tokens, expiry check, signature verification
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
-6. **ChatView** - Message history (scroll ↑↓), send with Enter
+6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
-8. **Diagnostics** - Port forwarding status (PCP, NAT-PMP, UPnP), CGNAT detection warning
+8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection
 
-**Keyboard:** q/Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
+**Keyboard:**
+- Global: q/Esc=back/quit, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
+- Main menu: c=chats, s=share, i=import, n=diagnostics
+- Diagnostics: r/F5=refresh
 
 **Colors:** Cyan=titles, Green=success/active, Yellow=warning/pending, Red=error/expired, Gray=inactive
 
@@ -99,16 +115,20 @@ cargo fmt
 ### Crypto
 - **Dual keypairs**: Ed25519 (signing) + X25519 (key exchange), both generated from random bytes
 - **UIDs**: Deterministic SHA-256(Ed25519_pubkey) → first 16 bytes as hex
-- **Ed25519**: 32 bytes (pub/priv), 64 bytes (signature). Used for message authentication
+- **Ed25519**: 32 bytes (pub/priv), 64 bytes (signature). Used for message authentication and token signing
 - **X25519**: 32 bytes (pub/secret), used for ECDH key exchange
 - **Key derivation**: Public key = `x25519(secret, basepoint)` with proper clamping
 - **Shared secrets**: `derive_shared_secret(my_x25519_secret, their_x25519_public)` → 32-byte symmetric key
-- **Token format**: Contact tokens include both Ed25519 pubkey (UID derivation) and X25519 pubkey (encryption)
+- **AEAD Encryption**: XChaCha20-Poly1305 with 24-byte nonces, 16-byte Poly1305 auth tags
+- **Token signing**: `sign_contact_token()` creates 64-byte Ed25519 signatures, `verify_contact_token()` verifies integrity
+- **EncryptedEnvelope**: `{nonce: [u8; 24], ciphertext: Vec<u8>}` with embedded auth tag
 
 ### Protocol
 - Version 1, UUIDv4 message IDs, Unix ms timestamps
 - CBOR for production, JSON for debug
-- Convenience: `new_text()`, `new_delete()`
+- **Encryption support**: `encrypted: bool` flag, payload contains `EncryptedEnvelope` (CBOR) when true
+- Convenience: `new_text()`, `new_delete()` (plaintext), `new_text_encrypted()`, `new_delete_encrypted()`
+- Methods: `decrypt_payload(secret)` for decryption, `get_payload(optional_secret)` for transparent access
 
 ### Transport
 - Hyper HTTP/1.1 server/client
@@ -122,7 +142,8 @@ cargo fmt
 - Auto-remove after max retries
 
 ### Storage
-- Contact tokens: base64 CBOR (IP, Ed25519 pubkey, X25519 pubkey, expiry)
+- **Contact tokens**: Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
+- **Token security**: Signature verified on import, rejects tampered/forged tokens
 - Settings: JSON file, auto-create parent dirs
 - AppState: JSON/CBOR serialization
 - Contact struct stores both pubkeys for dual-purpose: identity (Ed25519) and encryption (X25519)
@@ -170,27 +191,48 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests extracted to `src/tests/` directory (297 total tests)
+- All tests in `src/tests/` directory (301 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
+- Organized in subdirectories mirroring module structure
 
-**Test Files:**
-- `crypto_tests.rs` (11 tests) - Keypair generation, signing, UID derivation, X25519 shared secret derivation (symmetric property)
-- `protocol_tests.rs` (10 tests) - Message envelope serialization, versioning
+**Test Organization:**
+- `crypto_tests.rs` (27 tests) - Keypair generation, signing, UID derivation, X25519 shared secret, AEAD encryption (roundtrip, tampering), token signing (valid, invalid, corrupted)
+- `protocol_tests.rs` (25 tests) - Message envelope serialization, versioning, E2E encryption (roundtrip, wrong key, CBOR/JSON, plaintext vs encrypted)
 - `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
-- `storage_tests.rs` (51 tests) - Contact tokens (with dual pubkeys), AppState, Settings persistence
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP protocols, orchestrator, IPv6, CGNAT detection
-- `tui_tests.rs` (117 tests) - All TUI screens, App state, navigation, Diagnostics with CGNAT
+- `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
-**Note:** Binary (`src/bin/tui.rs`) has no tests - it's just glue code. All logic is tested in `tui_tests.rs`.
+**`storage_tests/` (62 tests):**
+- `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
+- `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
+- `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
+- `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
+- `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
+
+**`tui_tests/` (125 tests):**
+- `app_tests.rs` (36 tests) - App struct and business logic
+- `screen_tests/` (82 tests) - All screens, modularized by screen type:
+  - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
+  - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)
+  - `chat_list_tests.rs` (5 tests) - ChatListScreen (navigation, delete popup)
+  - `chat_view_tests.rs` (3 tests) - ChatViewScreen (input, scrolling)
+  - `settings_tests.rs` (9 tests) - SettingsScreen (validation, persistence)
+  - `startup_sync_tests.rs` (10 tests) - StartupSyncScreen (progress tracking)
+  - `diagnostics_tests.rs` (20 tests) - DiagnosticsScreen (IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size, CGNAT)
+  - `status_indicators_tests.rs` (10 tests) - Status badges and contact expiry
+  - `mod.rs` - Module organization
+- `types_tests.rs` (3 tests) - MenuItem enum
+- `ui_tests.rs` (4 tests) - UI helper functions (format_duration_until)
+
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files) for maintainability. Screen tests are modularized in `screen_tests/` subdirectory for easier navigation and maintenance.
 
 ## Dependencies
 
-**Core:** `ed25519-dalek`, `x25519-dalek`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
-**TUI:** `ratatui`, `crossterm`, `tempfile` (tests)
+**Core:** `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
+**TUI:** `ratatui`, `crossterm`, `arboard` (clipboard), `tempfile` (tests)
 
 ## Commit Style
 

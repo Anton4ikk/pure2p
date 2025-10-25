@@ -7,8 +7,13 @@
 //! - Key exchange protocols
 
 use crate::{Error, Result};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    XChaCha20Poly1305, XNonce,
+};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ring::digest::{Context, SHA256};
+use serde::{Deserialize, Serialize};
 use x25519_dalek::PublicKey as X25519PublicKey;
 
 /// Unique identifier derived from public key fingerprint
@@ -180,15 +185,209 @@ pub fn derive_shared_secret(local_priv: &[u8; 32], remote_pub: &[u8; 32]) -> [u8
     diffie_hellman(local_priv, remote_pub)
 }
 
-/// Encrypt data using a shared secret
-pub fn encrypt(_data: &[u8], _key: &[u8]) -> Result<Vec<u8>> {
-    // TODO: Implement encryption using x25519-dalek and ring
-    Err(Error::Crypto("Not yet implemented".to_string()))
+/// Encrypted message envelope containing ciphertext, nonce, and authentication tag
+///
+/// This structure represents an AEAD (Authenticated Encryption with Associated Data)
+/// encrypted message using XChaCha20-Poly1305. The authentication tag is embedded
+/// in the ciphertext by the AEAD cipher.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EncryptedEnvelope {
+    /// 24-byte nonce for XChaCha20-Poly1305
+    pub nonce: [u8; 24],
+    /// Encrypted data + 16-byte Poly1305 authentication tag (appended)
+    pub ciphertext: Vec<u8>,
 }
 
-/// Decrypt data using a shared secret
+/// Encrypt a message using XChaCha20-Poly1305 AEAD
+///
+/// This function encrypts plaintext using the provided shared secret and returns
+/// an `EncryptedEnvelope` containing the ciphertext, nonce, and authentication tag.
+///
+/// # Arguments
+///
+/// * `secret` - 32-byte shared secret (typically from X25519 key exchange)
+/// * `plaintext` - Data to encrypt
+///
+/// # Returns
+///
+/// An `EncryptedEnvelope` containing:
+/// - `nonce`: 24-byte random nonce
+/// - `ciphertext`: Encrypted data with embedded 16-byte Poly1305 authentication tag
+///
+/// # Example
+///
+/// ```
+/// use pure2p::crypto::{encrypt_message, decrypt_message};
+///
+/// # fn example() -> pure2p::Result<()> {
+/// let secret = [0u8; 32]; // In practice, use a real shared secret
+/// let plaintext = b"Hello, World!";
+///
+/// let envelope = encrypt_message(&secret, plaintext)?;
+/// let decrypted = decrypt_message(&secret, &envelope)?;
+///
+/// assert_eq!(plaintext, decrypted.as_slice());
+/// # Ok(())
+/// # }
+/// ```
+pub fn encrypt_message(secret: &[u8; 32], plaintext: &[u8]) -> Result<EncryptedEnvelope> {
+    use rand::RngCore;
+
+    // Create cipher from the shared secret
+    let cipher = XChaCha20Poly1305::new(secret.into());
+
+    // Generate a random 24-byte nonce
+    let mut nonce_bytes = [0u8; 24];
+    rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = XNonce::from(nonce_bytes);
+
+    // Encrypt the plaintext
+    // The encrypt method automatically appends the 16-byte Poly1305 tag
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| Error::Crypto(format!("Encryption failed: {}", e)))?;
+
+    Ok(EncryptedEnvelope {
+        nonce: nonce_bytes,
+        ciphertext,
+    })
+}
+
+/// Decrypt a message using XChaCha20-Poly1305 AEAD
+///
+/// This function decrypts an `EncryptedEnvelope` using the provided shared secret
+/// and verifies the authentication tag. If the tag verification fails, this indicates
+/// the message was tampered with or corrupted.
+///
+/// # Arguments
+///
+/// * `secret` - 32-byte shared secret (must match the one used for encryption)
+/// * `envelope` - The encrypted envelope to decrypt
+///
+/// # Returns
+///
+/// The decrypted plaintext, or an error if:
+/// - The authentication tag verification fails (data was tampered with)
+/// - The ciphertext is malformed
+///
+/// # Example
+///
+/// ```
+/// use pure2p::crypto::{encrypt_message, decrypt_message};
+///
+/// # fn example() -> pure2p::Result<()> {
+/// let secret = [0u8; 32];
+/// let plaintext = b"Secret message";
+///
+/// let envelope = encrypt_message(&secret, plaintext)?;
+/// let decrypted = decrypt_message(&secret, &envelope)?;
+///
+/// assert_eq!(plaintext, decrypted.as_slice());
+/// # Ok(())
+/// # }
+/// ```
+pub fn decrypt_message(secret: &[u8; 32], envelope: &EncryptedEnvelope) -> Result<Vec<u8>> {
+    // Create cipher from the shared secret
+    let cipher = XChaCha20Poly1305::new(secret.into());
+
+    // Convert nonce
+    let nonce = XNonce::from(envelope.nonce);
+
+    // Decrypt and verify the authentication tag
+    // The decrypt method automatically verifies the 16-byte Poly1305 tag
+    let plaintext = cipher
+        .decrypt(&nonce, envelope.ciphertext.as_ref())
+        .map_err(|e| Error::Crypto(format!("Decryption failed (auth tag mismatch or corrupted data): {}", e)))?;
+
+    Ok(plaintext)
+}
+
+/// Sign contact token data using Ed25519
+///
+/// This function creates a digital signature for contact token data to ensure
+/// integrity and authenticity. The signature proves that the token was created
+/// by the holder of the private key and hasn't been tampered with.
+///
+/// # Arguments
+///
+/// * `privkey` - 32-byte Ed25519 private key
+/// * `token_data` - The data to be signed (typically serialized contact information)
+///
+/// # Returns
+///
+/// A 64-byte Ed25519 signature
+///
+/// # Example
+///
+/// ```no_run
+/// use pure2p::crypto::sign_contact_token;
+///
+/// // In practice, you'd get the private key from a KeyPair
+/// let privkey = [0u8; 32]; // Your Ed25519 private key
+/// let token_data = b"contact token data";
+///
+/// let signature = sign_contact_token(&privkey, token_data)
+///     .expect("Failed to sign token");
+/// assert_eq!(signature.len(), 64); // Ed25519 signatures are 64 bytes
+/// ```
+pub fn sign_contact_token(privkey: &[u8; 32], token_data: &[u8]) -> Result<[u8; 64]> {
+    let signing_key = SigningKey::from_bytes(privkey);
+    let signature = signing_key.sign(token_data);
+    Ok(signature.to_bytes())
+}
+
+/// Verify contact token signature using Ed25519
+///
+/// This function verifies that a contact token signature is valid and that the
+/// token data hasn't been tampered with. It ensures the token was created by
+/// the holder of the private key corresponding to the given public key.
+///
+/// # Arguments
+///
+/// * `pubkey` - 32-byte Ed25519 public key
+/// * `token_data` - The data that was signed
+/// * `sig` - 64-byte Ed25519 signature to verify
+///
+/// # Returns
+///
+/// `true` if the signature is valid, `false` otherwise
+///
+/// # Example
+///
+/// ```no_run
+/// use pure2p::crypto::{sign_contact_token, verify_contact_token};
+///
+/// // In practice, you'd get keys from a KeyPair
+/// let privkey = [0u8; 32]; // Your Ed25519 private key
+/// let pubkey = [1u8; 32];  // Corresponding public key
+/// let token_data = b"contact token data";
+///
+/// let signature = sign_contact_token(&privkey, token_data)
+///     .expect("Failed to sign");
+///
+/// // Verify signature
+/// let is_valid = verify_contact_token(&pubkey, token_data, &signature)
+///     .expect("Failed to verify");
+/// println!("Signature valid: {}", is_valid);
+/// ```
+pub fn verify_contact_token(pubkey: &[u8; 32], token_data: &[u8], sig: &[u8; 64]) -> Result<bool> {
+    let verifying_key = VerifyingKey::from_bytes(pubkey)
+        .map_err(|e| Error::Crypto(format!("Invalid public key: {}", e)))?;
+
+    let signature = Signature::from_bytes(sig);
+
+    Ok(verifying_key.verify(token_data, &signature).is_ok())
+}
+
+/// Encrypt data using a shared secret (legacy function)
+pub fn encrypt(_data: &[u8], _key: &[u8]) -> Result<Vec<u8>> {
+    // TODO: Implement encryption using x25519-dalek and ring
+    Err(Error::Crypto("Not yet implemented - use encrypt_message instead".to_string()))
+}
+
+/// Decrypt data using a shared secret (legacy function)
 pub fn decrypt(_data: &[u8], _key: &[u8]) -> Result<Vec<u8>> {
-    // TODO: Implement decryption
-    Err(Error::Crypto("Not yet implemented".to_string()))
+    // TODO: Implement decryption - use decrypt_message instead
+    Err(Error::Crypto("Not yet implemented - use decrypt_message instead".to_string()))
 }
 

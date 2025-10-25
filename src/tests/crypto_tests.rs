@@ -201,3 +201,420 @@ fn test_derive_shared_secret_deterministic() {
     // Should always produce the same result
     assert_eq!(secret1, secret2);
 }
+
+// AEAD Encryption Tests (XChaCha20-Poly1305)
+
+#[test]
+fn test_encrypt_decrypt_roundtrip() {
+    // Generate a shared secret
+    let alice = KeyPair::generate().expect("Failed to generate Alice's keypair");
+    let bob = KeyPair::generate().expect("Failed to generate Bob's keypair");
+
+    let bob_x25519_pub: [u8; 32] = bob.x25519_public.as_slice().try_into().unwrap();
+    let shared_secret = alice
+        .derive_shared_secret(&bob_x25519_pub)
+        .expect("Failed to derive shared secret");
+
+    // Test with various plaintexts
+    let test_cases = vec![
+        b"Hello, World!".as_slice(),
+        b"".as_slice(), // Empty message
+        b"A".as_slice(), // Single byte
+        &[0u8; 1000], // Large message
+        b"Unicode: \xf0\x9f\x94\x92\xf0\x9f\x94\x91".as_slice(), // Emojis
+    ];
+
+    for plaintext in test_cases {
+        let envelope = encrypt_message(&shared_secret, plaintext)
+            .expect("Failed to encrypt message");
+
+        let decrypted = decrypt_message(&shared_secret, &envelope)
+            .expect("Failed to decrypt message");
+
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+}
+
+#[test]
+fn test_encrypted_envelope_structure() {
+    let secret = [0u8; 32];
+    let plaintext = b"Test message";
+
+    let envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Nonce should be 24 bytes
+    assert_eq!(envelope.nonce.len(), 24);
+
+    // Ciphertext should be plaintext length + 16 bytes (Poly1305 tag)
+    assert_eq!(envelope.ciphertext.len(), plaintext.len() + 16);
+}
+
+#[test]
+fn test_different_nonces_produce_different_ciphertext() {
+    let secret = [0u8; 32];
+    let plaintext = b"Same message";
+
+    let envelope1 = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message 1");
+    let envelope2 = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message 2");
+
+    // Nonces should be different (random)
+    assert_ne!(envelope1.nonce, envelope2.nonce);
+
+    // Ciphertexts should be different due to different nonces
+    assert_ne!(envelope1.ciphertext, envelope2.ciphertext);
+
+    // But both should decrypt to the same plaintext
+    let decrypted1 = decrypt_message(&secret, &envelope1)
+        .expect("Failed to decrypt message 1");
+    let decrypted2 = decrypt_message(&secret, &envelope2)
+        .expect("Failed to decrypt message 2");
+
+    assert_eq!(decrypted1, decrypted2);
+    assert_eq!(decrypted1, plaintext);
+}
+
+#[test]
+fn test_wrong_key_fails_decryption() {
+    let secret1 = [1u8; 32];
+    let secret2 = [2u8; 32];
+    let plaintext = b"Secret message";
+
+    let envelope = encrypt_message(&secret1, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Attempting to decrypt with wrong key should fail
+    let result = decrypt_message(&secret2, &envelope);
+    assert!(result.is_err());
+
+    // Error message should indicate auth failure
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("auth tag mismatch") ||
+            err.to_string().contains("Decryption failed"));
+}
+
+#[test]
+fn test_tampered_ciphertext_fails_decryption() {
+    let secret = [0u8; 32];
+    let plaintext = b"Authentic message";
+
+    let mut envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Tamper with the ciphertext
+    if let Some(byte) = envelope.ciphertext.first_mut() {
+        *byte ^= 0xFF;
+    }
+
+    // Decryption should fail due to authentication tag mismatch
+    let result = decrypt_message(&secret, &envelope);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("auth tag mismatch") ||
+            err.to_string().contains("Decryption failed"));
+}
+
+#[test]
+fn test_tampered_nonce_fails_decryption() {
+    let secret = [0u8; 32];
+    let plaintext = b"Message with nonce";
+
+    let mut envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Tamper with the nonce
+    envelope.nonce[0] ^= 0xFF;
+
+    // Decryption should fail (wrong nonce produces wrong plaintext and tag mismatch)
+    let result = decrypt_message(&secret, &envelope);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_envelope_serialization() {
+    let secret = [0u8; 32];
+    let plaintext = b"Serializable message";
+
+    let envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Test JSON serialization
+    let json = serde_json::to_string(&envelope)
+        .expect("Failed to serialize to JSON");
+    let deserialized: EncryptedEnvelope = serde_json::from_str(&json)
+        .expect("Failed to deserialize from JSON");
+
+    assert_eq!(envelope, deserialized);
+
+    // Verify decryption still works after serialization roundtrip
+    let decrypted = decrypt_message(&secret, &deserialized)
+        .expect("Failed to decrypt after serialization");
+    assert_eq!(plaintext, decrypted.as_slice());
+}
+
+#[test]
+fn test_envelope_cbor_serialization() {
+    let secret = [0u8; 32];
+    let plaintext = b"CBOR message";
+
+    let envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Test CBOR serialization
+    let cbor = serde_cbor::to_vec(&envelope)
+        .expect("Failed to serialize to CBOR");
+    let deserialized: EncryptedEnvelope = serde_cbor::from_slice(&cbor)
+        .expect("Failed to deserialize from CBOR");
+
+    assert_eq!(envelope, deserialized);
+
+    // Verify decryption still works
+    let decrypted = decrypt_message(&secret, &deserialized)
+        .expect("Failed to decrypt after CBOR serialization");
+    assert_eq!(plaintext, decrypted.as_slice());
+}
+
+#[test]
+fn test_encrypt_large_message() {
+    let secret = [0u8; 32];
+    let plaintext = vec![42u8; 1_000_000]; // 1 MB message
+
+    let envelope = encrypt_message(&secret, &plaintext)
+        .expect("Failed to encrypt large message");
+
+    let decrypted = decrypt_message(&secret, &envelope)
+        .expect("Failed to decrypt large message");
+
+    assert_eq!(plaintext, decrypted);
+}
+
+#[test]
+fn test_encrypt_empty_message() {
+    let secret = [0u8; 32];
+    let plaintext = b"";
+
+    let envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt empty message");
+
+    // Even empty messages get a 16-byte auth tag
+    assert_eq!(envelope.ciphertext.len(), 16);
+
+    let decrypted = decrypt_message(&secret, &envelope)
+        .expect("Failed to decrypt empty message");
+
+    assert_eq!(plaintext, decrypted.as_slice());
+}
+
+#[test]
+fn test_truncated_ciphertext_fails() {
+    let secret = [0u8; 32];
+    let plaintext = b"Message to truncate";
+
+    let mut envelope = encrypt_message(&secret, plaintext)
+        .expect("Failed to encrypt message");
+
+    // Truncate ciphertext (remove last byte of auth tag)
+    envelope.ciphertext.pop();
+
+    // Decryption should fail
+    let result = decrypt_message(&secret, &envelope);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_end_to_end_encrypted_communication() {
+    // Simulate Alice and Bob exchanging encrypted messages
+    let alice = KeyPair::generate().expect("Failed to generate Alice's keypair");
+    let bob = KeyPair::generate().expect("Failed to generate Bob's keypair");
+
+    // Both derive the same shared secret
+    let alice_x25519_pub: [u8; 32] = alice.x25519_public.as_slice().try_into().unwrap();
+    let bob_x25519_pub: [u8; 32] = bob.x25519_public.as_slice().try_into().unwrap();
+
+    let alice_shared_secret = alice
+        .derive_shared_secret(&bob_x25519_pub)
+        .expect("Alice failed to derive shared secret");
+    let bob_shared_secret = bob
+        .derive_shared_secret(&alice_x25519_pub)
+        .expect("Bob failed to derive shared secret");
+
+    // Verify they derived the same secret
+    assert_eq!(alice_shared_secret, bob_shared_secret);
+
+    // Alice sends encrypted message to Bob
+    let alice_message = b"Hello Bob, this is Alice!";
+    let encrypted_to_bob = encrypt_message(&alice_shared_secret, alice_message)
+        .expect("Alice failed to encrypt");
+
+    // Bob decrypts Alice's message
+    let decrypted_by_bob = decrypt_message(&bob_shared_secret, &encrypted_to_bob)
+        .expect("Bob failed to decrypt");
+    assert_eq!(alice_message, decrypted_by_bob.as_slice());
+
+    // Bob sends encrypted reply to Alice
+    let bob_message = b"Hi Alice, message received!";
+    let encrypted_to_alice = encrypt_message(&bob_shared_secret, bob_message)
+        .expect("Bob failed to encrypt");
+
+    // Alice decrypts Bob's message
+    let decrypted_by_alice = decrypt_message(&alice_shared_secret, &encrypted_to_alice)
+        .expect("Alice failed to decrypt");
+    assert_eq!(bob_message, decrypted_by_alice.as_slice());
+}
+
+// Contact Token Signing Tests (Ed25519)
+
+#[test]
+fn test_sign_and_verify_contact_token() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let token_data = b"contact token test data";
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+    let pubkey: [u8; 32] = keypair.public_key.as_slice().try_into().unwrap();
+
+    // Sign the token data
+    let signature = sign_contact_token(&privkey, token_data)
+        .expect("Failed to sign token");
+
+    // Signature should be 64 bytes
+    assert_eq!(signature.len(), 64);
+
+    // Verify the signature
+    let is_valid = verify_contact_token(&pubkey, token_data, &signature)
+        .expect("Failed to verify token");
+    assert!(is_valid);
+}
+
+#[test]
+fn test_verify_invalid_contact_token_signature() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let token_data = b"original token data";
+    let tampered_data = b"tampered token data";
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+    let pubkey: [u8; 32] = keypair.public_key.as_slice().try_into().unwrap();
+
+    // Sign the original data
+    let signature = sign_contact_token(&privkey, token_data)
+        .expect("Failed to sign token");
+
+    // Verify with tampered data should fail
+    let is_valid = verify_contact_token(&pubkey, tampered_data, &signature)
+        .expect("Failed to verify token");
+    assert!(!is_valid);
+}
+
+#[test]
+fn test_verify_corrupted_contact_token_signature() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let token_data = b"token data";
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+    let pubkey: [u8; 32] = keypair.public_key.as_slice().try_into().unwrap();
+
+    // Sign the token
+    let mut signature = sign_contact_token(&privkey, token_data)
+        .expect("Failed to sign token");
+
+    // Corrupt the signature
+    signature[0] ^= 0xFF;
+    signature[32] ^= 0xAA;
+
+    // Verification should fail
+    let is_valid = verify_contact_token(&pubkey, token_data, &signature)
+        .expect("Failed to verify token");
+    assert!(!is_valid);
+}
+
+#[test]
+fn test_verify_with_wrong_public_key() {
+    let keypair1 = KeyPair::generate().expect("Failed to generate keypair 1");
+    let keypair2 = KeyPair::generate().expect("Failed to generate keypair 2");
+    let token_data = b"token data";
+
+    let privkey1: [u8; 32] = keypair1.private_key.as_slice().try_into().unwrap();
+    let pubkey2: [u8; 32] = keypair2.public_key.as_slice().try_into().unwrap();
+
+    // Sign with keypair1's private key
+    let signature = sign_contact_token(&privkey1, token_data)
+        .expect("Failed to sign token");
+
+    // Verify with keypair2's public key should fail
+    let is_valid = verify_contact_token(&pubkey2, token_data, &signature)
+        .expect("Failed to verify token");
+    assert!(!is_valid);
+}
+
+#[test]
+fn test_contact_token_signature_deterministic() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let token_data = b"deterministic test";
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+
+    // Sign the same data twice
+    let signature1 = sign_contact_token(&privkey, token_data)
+        .expect("Failed to sign token 1");
+    let signature2 = sign_contact_token(&privkey, token_data)
+        .expect("Failed to sign token 2");
+
+    // Ed25519 signatures are deterministic (same input -> same output)
+    assert_eq!(signature1, signature2);
+}
+
+#[test]
+fn test_contact_token_signature_different_data() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let data1 = b"token data 1";
+    let data2 = b"token data 2";
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+
+    // Sign different data
+    let signature1 = sign_contact_token(&privkey, data1)
+        .expect("Failed to sign token 1");
+    let signature2 = sign_contact_token(&privkey, data2)
+        .expect("Failed to sign token 2");
+
+    // Signatures should be different
+    assert_ne!(signature1, signature2);
+}
+
+#[test]
+fn test_contact_token_empty_data() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let empty_data = b"";
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+    let pubkey: [u8; 32] = keypair.public_key.as_slice().try_into().unwrap();
+
+    // Sign empty data (should work)
+    let signature = sign_contact_token(&privkey, empty_data)
+        .expect("Failed to sign empty token");
+
+    // Verify should succeed
+    let is_valid = verify_contact_token(&pubkey, empty_data, &signature)
+        .expect("Failed to verify empty token");
+    assert!(is_valid);
+}
+
+#[test]
+fn test_contact_token_large_data() {
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let large_data = vec![42u8; 10_000]; // 10 KB
+
+    let privkey: [u8; 32] = keypair.private_key.as_slice().try_into().unwrap();
+    let pubkey: [u8; 32] = keypair.public_key.as_slice().try_into().unwrap();
+
+    // Sign large data
+    let signature = sign_contact_token(&privkey, &large_data)
+        .expect("Failed to sign large token");
+
+    // Verify should succeed
+    let is_valid = verify_contact_token(&pubkey, &large_data, &signature)
+        .expect("Failed to verify large token");
+    assert!(is_valid);
+}

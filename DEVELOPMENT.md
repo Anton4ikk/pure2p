@@ -13,7 +13,7 @@ Setup instructions for Pure2P development.
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone and build
-git clone https://github.com/yourusername/pure2p.git
+git clone https://github.com/Anton4ikk/pure2p.git
 cd pure2p
 cargo build --release
 
@@ -64,18 +64,48 @@ src/
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
 │   ├── app.rs          # App business logic
-│   └── ui.rs           # Rendering functions
-├── tests/              # Unit tests (297 tests)
+│   └── ui/             # Modular rendering (10 files)
+│       ├── mod.rs      # Main ui() dispatcher
+│       ├── startup_sync.rs
+│       ├── main_menu.rs
+│       ├── share_contact.rs
+│       ├── import_contact.rs
+│       ├── chat_list.rs
+│       ├── chat_view.rs
+│       ├── settings.rs
+│       ├── diagnostics.rs
+│       └── helpers.rs
+├── tests/              # Unit tests (301 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
 │   ├── transport_tests.rs
-│   ├── storage_tests.rs
 │   ├── queue_tests.rs
 │   ├── messaging_tests.rs
 │   ├── connectivity_tests.rs  # Includes CGNAT detection
-│   ├── tui_tests.rs
-│   └── lib_tests.rs
+│   ├── lib_tests.rs
+│   ├── storage_tests/  # Storage module tests (51 tests)
+│   │   ├── mod.rs
+│   │   ├── contact_tests.rs
+│   │   ├── token_tests.rs
+│   │   ├── chat_tests.rs
+│   │   ├── app_state_tests.rs
+│   │   └── settings_tests.rs
+│   └── tui_tests/      # TUI module tests (125 tests)
+│       ├── mod.rs
+│       ├── app_tests.rs
+│       ├── screen_tests/     # Modularized screen tests (82 tests)
+│       │   ├── mod.rs
+│       │   ├── share_contact_tests.rs
+│       │   ├── import_contact_tests.rs
+│       │   ├── chat_list_tests.rs
+│       │   ├── chat_view_tests.rs
+│       │   ├── settings_tests.rs
+│       │   ├── startup_sync_tests.rs
+│       │   ├── diagnostics_tests.rs
+│       │   └── status_indicators_tests.rs
+│       ├── types_tests.rs
+│       └── ui_tests.rs
 └── bin/
     └── tui.rs          # TUI binary (thin wrapper)
 ```
@@ -93,10 +123,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (297 total)
-cargo test --lib               # Library tests only
-cargo test -- --nocapture      # Show output
-cargo test -- --test-threads=1 # Sequential (if needed)
+cargo test                     # All tests (305 total)
 
 # Quality
 cargo fmt                      # Format
@@ -141,18 +168,41 @@ src/tests/
 ├── crypto_tests.rs       (11 tests)  - Keypair, signing, UID, X25519 ECDH
 ├── protocol_tests.rs     (10 tests)  - Envelopes, serialization
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
-├── storage_tests.rs      (51 tests)  - Tokens (dual pubkeys), AppState, Settings
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
-├── tui_tests.rs          (117 tests) - All TUI screens/logic, Diagnostics with CGNAT
-└── lib_tests.rs          (1 test)    - Library init
+├── lib_tests.rs          (1 test)    - Library init
+├── storage_tests/        (51 tests)  - Organized by functionality
+│   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
+│   ├── token_tests.rs    (8 tests)   - Token generation/parsing, validation
+│   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
+│   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
+│   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency
+└── tui_tests/            (125 tests) - Organized by TUI components
+    ├── app_tests.rs      (36 tests)  - App business logic
+    ├── screen_tests/     (82 tests)  - Modularized by screen type
+    │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
+    │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
+    │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen
+    │   ├── chat_view_tests.rs        (3 tests)   - ChatViewScreen
+    │   ├── settings_tests.rs         (9 tests)   - SettingsScreen
+    │   ├── startup_sync_tests.rs     (10 tests)  - StartupSyncScreen
+    │   ├── diagnostics_tests.rs      (20 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT)
+    │   └── status_indicators_tests.rs (10 tests) - Status badges and contact expiry
+    ├── types_tests.rs    (3 tests)   - MenuItem enum
+    └── ui_tests.rs       (4 tests)   - UI helper functions (format_duration_until)
 ```
 
-**Run specific test file:**
+**Run specific tests:**
 ```bash
-cargo test --test crypto_tests
-cargo test --test tui_tests
+cargo test --lib                        # All library tests
+cargo test crypto_tests                 # Crypto tests
+cargo test storage_tests                # All storage tests
+cargo test tui_tests                    # All TUI tests
+cargo test storage_tests::contact       # Just contact tests
+cargo test tui_tests::app               # Just app tests
+cargo test tui_tests::screen_tests      # All screen tests
+cargo test screen_tests::diagnostics    # Just diagnostics tests
 ```
 
 ---

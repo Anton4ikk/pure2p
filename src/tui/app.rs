@@ -143,8 +143,61 @@ impl App {
     /// Show diagnostics screen
     pub fn show_diagnostics_screen(&mut self) {
         let default_port = 8080; // TODO: Get from actual listening port
-        self.diagnostics_screen = Some(DiagnosticsScreen::new(default_port));
+        let mut screen = DiagnosticsScreen::new(default_port);
+
+        // Populate with current app state data
+        self.update_diagnostics_with_app_state(&mut screen);
+
+        self.diagnostics_screen = Some(screen);
         self.current_screen = Screen::Diagnostics;
+    }
+
+    /// Update diagnostics screen with current app state
+    pub fn update_diagnostics_with_app_state(&self, screen: &mut DiagnosticsScreen) {
+        // Set IPv4 address from local_ip
+        if !self.local_ip.is_empty() {
+            // Parse to check if it's IPv4 or IPv6
+            if let Ok(ip) = self.local_ip.parse::<std::net::IpAddr>() {
+                if ip.is_ipv4() {
+                    screen.set_ipv4_address(Some(self.local_ip.clone()));
+                } else if ip.is_ipv6() {
+                    screen.set_ipv6_address(Some(self.local_ip.clone()));
+                }
+            } else {
+                // If it's not a valid IP, assume IPv4 for display
+                screen.set_ipv4_address(Some(self.local_ip.clone()));
+            }
+        }
+
+        // Set queue size from app state
+        screen.set_queue_size(self.app_state.message_queue.len());
+    }
+
+    /// Refresh diagnostics screen with latest data
+    pub fn refresh_diagnostics(&mut self) {
+        // Extract necessary data first to avoid borrow conflicts
+        let local_ip = self.local_ip.clone();
+        let queue_size = self.app_state.message_queue.len();
+
+        if let Some(screen) = &mut self.diagnostics_screen {
+            // Set IPv4 address from local_ip
+            if !local_ip.is_empty() {
+                // Parse to check if it's IPv4 or IPv6
+                if let Ok(ip) = local_ip.parse::<std::net::IpAddr>() {
+                    if ip.is_ipv4() {
+                        screen.set_ipv4_address(Some(local_ip));
+                    } else if ip.is_ipv6() {
+                        screen.set_ipv6_address(Some(local_ip));
+                    }
+                } else {
+                    // If it's not a valid IP, assume IPv4 for display
+                    screen.set_ipv4_address(Some(local_ip));
+                }
+            }
+
+            // Set queue size
+            screen.set_queue_size(queue_size);
+        }
     }
 
     /// Return to main menu
