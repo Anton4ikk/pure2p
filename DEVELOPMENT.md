@@ -70,12 +70,23 @@ src/
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
 │   ├── transport_tests.rs
-│   ├── storage_tests.rs
 │   ├── queue_tests.rs
 │   ├── messaging_tests.rs
 │   ├── connectivity_tests.rs  # Includes CGNAT detection
-│   ├── tui_tests.rs
-│   └── lib_tests.rs
+│   ├── lib_tests.rs
+│   ├── storage_tests/  # Storage module tests (51 tests)
+│   │   ├── mod.rs
+│   │   ├── contact_tests.rs
+│   │   ├── token_tests.rs
+│   │   ├── chat_tests.rs
+│   │   ├── app_state_tests.rs
+│   │   └── settings_tests.rs
+│   └── tui_tests/      # TUI module tests (117 tests)
+│       ├── mod.rs
+│       ├── app_tests.rs
+│       ├── screens_tests.rs
+│       ├── types_tests.rs
+│       └── ui_tests.rs
 └── bin/
     └── tui.rs          # TUI binary (thin wrapper)
 ```
@@ -141,18 +152,31 @@ src/tests/
 ├── crypto_tests.rs       (11 tests)  - Keypair, signing, UID, X25519 ECDH
 ├── protocol_tests.rs     (10 tests)  - Envelopes, serialization
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
-├── storage_tests.rs      (51 tests)  - Tokens (dual pubkeys), AppState, Settings
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
-├── tui_tests.rs          (117 tests) - All TUI screens/logic, Diagnostics with CGNAT
-└── lib_tests.rs          (1 test)    - Library init
+├── lib_tests.rs          (1 test)    - Library init
+├── storage_tests/        (51 tests)  - Organized by functionality
+│   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
+│   ├── token_tests.rs    (8 tests)   - Token generation/parsing, validation
+│   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
+│   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
+│   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency
+└── tui_tests/            (117 tests) - Organized by TUI components
+    ├── app_tests.rs      (36 tests)  - App business logic
+    ├── screens_tests.rs  (69 tests)  - All screens (ShareContact, ImportContact, etc.)
+    ├── types_tests.rs    (3 tests)   - MenuItem enum
+    └── ui_tests.rs       (4 tests)   - UI helper functions
 ```
 
-**Run specific test file:**
+**Run specific tests:**
 ```bash
-cargo test --test crypto_tests
-cargo test --test tui_tests
+cargo test --lib                  # All library tests
+cargo test crypto_tests           # Crypto tests
+cargo test storage_tests          # All storage tests
+cargo test tui_tests              # All TUI tests
+cargo test storage_tests::contact # Just contact tests
+cargo test tui_tests::app         # Just app tests
 ```
 
 ---

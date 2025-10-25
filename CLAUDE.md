@@ -170,22 +170,34 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests extracted to `src/tests/` directory (297 total tests)
+- All tests in `src/tests/` directory (297 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
+- Organized in subdirectories mirroring module structure
 
-**Test Files:**
-- `crypto_tests.rs` (11 tests) - Keypair generation, signing, UID derivation, X25519 shared secret derivation (symmetric property)
+**Test Organization:**
+- `crypto_tests.rs` (11 tests) - Keypair generation, signing, UID derivation, X25519 shared secret
 - `protocol_tests.rs` (10 tests) - Message envelope serialization, versioning
 - `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
-- `storage_tests.rs` (51 tests) - Contact tokens (with dual pubkeys), AppState, Settings persistence
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP protocols, orchestrator, IPv6, CGNAT detection
-- `tui_tests.rs` (117 tests) - All TUI screens, App state, navigation, Diagnostics with CGNAT
+- `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
-**Note:** Binary (`src/bin/tui.rs`) has no tests - it's just glue code. All logic is tested in `tui_tests.rs`.
+**`storage_tests/` (51 tests):**
+- `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
+- `token_tests.rs` (8 tests) - Token generation/parsing (roundtrip, validation, crypto integration)
+- `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
+- `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
+- `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
+
+**`tui_tests/` (117 tests):**
+- `app_tests.rs` (36 tests) - App struct and business logic
+- `screens_tests.rs` (69 tests) - All screens (ShareContact, ImportContact, ChatList, ChatView, Settings, StartupSync, Diagnostics)
+- `types_tests.rs` (3 tests) - MenuItem enum
+- `ui_tests.rs` (4 tests) - UI helper functions (format_duration_until)
+
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`.
 
 ## Dependencies
 
