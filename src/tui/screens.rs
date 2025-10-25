@@ -22,7 +22,12 @@ impl ShareContactScreen {
     pub fn new(keypair: &KeyPair, local_ip: &str) -> Self {
         // Default: 30 days expiry
         let expiry = Utc::now() + Duration::days(30);
-        let token = generate_contact_token(local_ip, &keypair.public_key, expiry);
+        let token = generate_contact_token(
+            local_ip,
+            &keypair.public_key,
+            &keypair.x25519_public,
+            expiry,
+        );
 
         Self {
             token,

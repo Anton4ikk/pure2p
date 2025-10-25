@@ -9,6 +9,7 @@
 use crate::{Error, Result};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ring::digest::{Context, SHA256};
+use x25519_dalek::PublicKey as X25519PublicKey;
 
 /// Unique identifier derived from public key fingerprint
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -45,19 +46,24 @@ impl std::fmt::Display for UID {
 /// Represents a cryptographic key pair
 #[derive(Debug)]
 pub struct KeyPair {
-    /// Public key
+    /// Ed25519 public key (for signing/verification)
     pub public_key: Vec<u8>,
-    /// Private key (should be kept secure)
+    /// Ed25519 private key (should be kept secure)
     pub(crate) private_key: Vec<u8>,
-    /// Unique identifier derived from public key
+    /// X25519 public key (for key exchange)
+    pub x25519_public: Vec<u8>,
+    /// X25519 private key (should be kept secure)
+    pub(crate) x25519_secret: Vec<u8>,
+    /// Unique identifier derived from Ed25519 public key
     pub uid: UID,
 }
 
 impl KeyPair {
-    /// Generate a new Ed25519 key pair
+    /// Generate a new key pair (Ed25519 for signing + X25519 for key exchange)
     pub fn generate() -> Result<Self> {
         use rand::rngs::OsRng;
 
+        // Generate Ed25519 keypair for signing/verification
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
 
@@ -65,9 +71,21 @@ impl KeyPair {
         let public_key = verifying_key.to_bytes().to_vec();
         let uid = UID::from_public_key(&public_key);
 
+        // Generate X25519 keypair for key exchange
+        // Generate 32 random bytes for the secret key
+        let mut x25519_secret_bytes = [0u8; 32];
+        use rand::RngCore;
+        OsRng.fill_bytes(&mut x25519_secret_bytes);
+
+        // Derive public key from secret: public = basepoint * secret
+        let x25519_public_bytes = x25519_dalek::x25519(x25519_secret_bytes, x25519_dalek::X25519_BASEPOINT_BYTES);
+        let x25519_public = X25519PublicKey::from(x25519_public_bytes);
+
         Ok(KeyPair {
             public_key,
             private_key,
+            x25519_public: x25519_public.to_bytes().to_vec(),
+            x25519_secret: x25519_secret_bytes.to_vec(),
             uid,
         })
     }
@@ -108,6 +126,58 @@ impl KeyPair {
     pub fn uid(&self) -> &UID {
         &self.uid
     }
+
+    /// Derive a shared secret with a remote peer's X25519 public key
+    pub fn derive_shared_secret(&self, remote_x25519_public: &[u8; 32]) -> Result<[u8; 32]> {
+        let local_secret_bytes: [u8; 32] = self.x25519_secret.as_slice()
+            .try_into()
+            .map_err(|_| Error::Crypto("Invalid X25519 secret key length".to_string()))?;
+
+        let remote_public = X25519PublicKey::from(*remote_x25519_public);
+
+        // Perform the scalar multiplication: local_secret * remote_public
+        let shared_secret = diffie_hellman(&local_secret_bytes, remote_public.as_bytes());
+
+        Ok(shared_secret)
+    }
+}
+
+/// Internal helper: Perform X25519 Diffie-Hellman
+fn diffie_hellman(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
+    // x25519 function performs the scalar multiplication with proper clamping
+    x25519_dalek::x25519(*secret, *public)
+}
+
+/// Derive a shared secret using X25519 ECDH
+///
+/// This function performs Diffie-Hellman key exchange using the X25519 elliptic curve.
+/// The resulting shared secret can be used as a base key for AEAD encryption.
+///
+/// # Arguments
+///
+/// * `local_priv` - Local X25519 private key (32 bytes)
+/// * `remote_pub` - Remote X25519 public key (32 bytes)
+///
+/// # Returns
+///
+/// A 32-byte shared secret derived from the key exchange
+///
+/// # Example
+///
+/// ```
+/// use pure2p::crypto::derive_shared_secret;
+///
+/// # fn example() -> pure2p::Result<()> {
+/// let alice_secret = [1u8; 32];
+/// let bob_public = [2u8; 32];
+///
+/// let shared_secret = derive_shared_secret(&alice_secret, &bob_public);
+/// assert_eq!(shared_secret.len(), 32);
+/// # Ok(())
+/// # }
+/// ```
+pub fn derive_shared_secret(local_priv: &[u8; 32], remote_pub: &[u8; 32]) -> [u8; 32] {
+    diffie_hellman(local_priv, remote_pub)
 }
 
 /// Encrypt data using a shared secret

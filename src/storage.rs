@@ -16,12 +16,14 @@ use std::path::Path;
 /// Represents a contact/peer in the P2P network
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
-    /// Unique identifier (derived from public key)
+    /// Unique identifier (derived from Ed25519 public key)
     pub uid: String,
     /// IP address and port (e.g., "192.168.1.100:8080")
     pub ip: String,
-    /// Ed25519 public key bytes
+    /// Ed25519 public key bytes (for signature verification)
     pub pubkey: Vec<u8>,
+    /// X25519 public key bytes (for key exchange)
+    pub x25519_pubkey: Vec<u8>,
     /// Expiration timestamp for this contact entry
     pub expiry: DateTime<Utc>,
     /// Whether this contact is currently active
@@ -30,11 +32,18 @@ pub struct Contact {
 
 impl Contact {
     /// Create a new contact
-    pub fn new(uid: String, ip: String, pubkey: Vec<u8>, expiry: DateTime<Utc>) -> Self {
+    pub fn new(
+        uid: String,
+        ip: String,
+        pubkey: Vec<u8>,
+        x25519_pubkey: Vec<u8>,
+        expiry: DateTime<Utc>,
+    ) -> Self {
         Self {
             uid,
             ip,
             pubkey,
+            x25519_pubkey,
             expiry,
             is_active: true, // New contacts are active by default
         }
@@ -61,24 +70,32 @@ impl Contact {
 struct ContactTokenData {
     ip: String,
     pubkey: Vec<u8>,
+    x25519_pubkey: Vec<u8>,
     expiry: DateTime<Utc>,
 }
 
-/// Generate a contact token from IP, public key, and expiry
+/// Generate a contact token from IP, public keys, and expiry
 ///
 /// The token is serialized using CBOR and encoded as base64 URL-safe without padding.
 ///
 /// # Arguments
 /// * `ip` - IP address and port (e.g., "192.168.1.100:8080")
-/// * `pubkey` - Ed25519 public key bytes
+/// * `pubkey` - Ed25519 public key bytes (for signature verification)
+/// * `x25519_pubkey` - X25519 public key bytes (for key exchange)
 /// * `expiry` - Expiration timestamp
 ///
 /// # Returns
 /// A base64-encoded contact token string
-pub fn generate_contact_token(ip: &str, pubkey: &[u8], expiry: DateTime<Utc>) -> String {
+pub fn generate_contact_token(
+    ip: &str,
+    pubkey: &[u8],
+    x25519_pubkey: &[u8],
+    expiry: DateTime<Utc>,
+) -> String {
     let data = ContactTokenData {
         ip: ip.to_string(),
         pubkey: pubkey.to_vec(),
+        x25519_pubkey: x25519_pubkey.to_vec(),
         expiry,
     };
 
@@ -119,11 +136,17 @@ pub fn parse_contact_token(token: &str) -> Result<Contact> {
         return Err(Error::Storage("Contact token has expired".to_string()));
     }
 
-    // Generate UID from public key
+    // Generate UID from Ed25519 public key
     let uid = UID::from_public_key(&data.pubkey);
 
     // Create contact
-    Ok(Contact::new(uid.to_string(), data.ip, data.pubkey, data.expiry))
+    Ok(Contact::new(
+        uid.to_string(),
+        data.ip,
+        data.pubkey,
+        data.x25519_pubkey,
+        data.expiry,
+    ))
 }
 
 /// Represents a stored message

@@ -396,6 +396,7 @@ async fn test_ping_endpoint() {
         "server_uid_789".to_string(),
         local_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -429,6 +430,7 @@ async fn test_ping_unknown_uid() {
         "any_uid".to_string(),
         local_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -452,6 +454,7 @@ async fn test_ping_unreachable_peer() {
         "unreachable_uid".to_string(),
         "127.0.0.1:59999".to_string(), // Unlikely to be in use
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -486,6 +489,7 @@ async fn test_ping_multiple_peers() {
         "peer1_uid".to_string(),
         addr1.to_string(),
         vec![1],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -493,6 +497,7 @@ async fn test_ping_multiple_peers() {
         "peer2_uid".to_string(),
         addr2.to_string(),
         vec![2],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -597,6 +602,7 @@ async fn test_message_endpoint() {
         "receiver_uid".to_string(),
         local_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -639,6 +645,7 @@ async fn test_message_endpoint_different_types() {
         "receiver_uid".to_string(),
         local_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -668,6 +675,7 @@ async fn test_message_unreachable_peer() {
         "unreachable".to_string(),
         "127.0.0.1:59998".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + ChronoDuration::days(30),
     );
 
@@ -707,8 +715,8 @@ async fn test_message_bidirectional() {
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
-    let contact1 = Contact::new("peer1".to_string(), addr1.to_string(), vec![1], Utc::now() + ChronoDuration::days(30));
-    let contact2 = Contact::new("peer2".to_string(), addr2.to_string(), vec![2], Utc::now() + ChronoDuration::days(30));
+    let contact1 = Contact::new("peer1".to_string(), addr1.to_string(), vec![1], vec![99u8; 32], Utc::now() + ChronoDuration::days(30));
+    let contact2 = Contact::new("peer2".to_string(), addr2.to_string(), vec![2], vec![99u8; 32], Utc::now() + ChronoDuration::days(30));
 
     // Send from 1 to 2
     transport1.send_message(&contact2, "peer1", "text", b"Hello from 1".to_vec()).await.expect("Send 1->2 failed");

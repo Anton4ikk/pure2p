@@ -11,6 +11,7 @@ fn create_test_contact() -> Contact {
         "test_uid".to_string(),
         "127.0.0.1:9999".to_string(), // Use unlikely port to simulate failure
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     )
 }
@@ -117,6 +118,7 @@ async fn test_send_message_success() {
         "receiver_uid".to_string(),
         receiver_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
 
@@ -165,6 +167,7 @@ async fn test_send_multiple_messages_mixed_results() {
         "receiver_uid".to_string(),
         receiver_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
 
@@ -290,6 +293,7 @@ async fn test_send_delete_chat_success() {
         "receiver_uid".to_string(),
         receiver_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
 
@@ -553,6 +557,7 @@ async fn test_delete_chat_roundtrip() {
         "receiver_uid".to_string(),
         receiver_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
 
@@ -650,6 +655,7 @@ async fn test_create_chat_from_ping_success() {
         "alice_uid".to_string(),
         receiver_addr.to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
 
@@ -678,6 +684,7 @@ async fn test_create_chat_from_ping_failure() {
         "unreachable_uid".to_string(),
         "127.0.0.1:59999".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
 

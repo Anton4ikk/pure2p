@@ -286,6 +286,7 @@ impl Transport {
     ///     "alice_uid".to_string(),
     ///     "192.168.1.100:8080".to_string(),
     ///     vec![1, 2, 3],
+    ///     vec![99u8; 32], // x25519_pubkey
     ///     Utc::now() + Duration::days(30),
     /// );
     ///
@@ -363,6 +364,7 @@ impl Transport {
     ///     "alice_uid".to_string(),
     ///     "192.168.1.100:8080".to_string(),
     ///     vec![1, 2, 3],
+    ///     vec![99u8; 32], // x25519_pubkey
     ///     Utc::now() + Duration::days(30),
     /// );
     ///

@@ -42,7 +42,7 @@ sudo apt-get install build-essential pkg-config libssl-dev
 ```
 src/
 ├── lib.rs              # Entry point, error types
-├── crypto.rs           # Ed25519, UIDs
+├── crypto.rs           # Ed25519 (signing), X25519 (key exchange), UIDs, ECDH
 ├── protocol.rs         # CBOR/JSON envelopes
 ├── transport.rs        # HTTP server/client
 ├── storage.rs          # Contacts, chats, AppState
@@ -140,10 +140,10 @@ git push origin feature/name
 
 ```
 src/tests/
-├── crypto_tests.rs       (7 tests)   - Keypair, signing, UID
+├── crypto_tests.rs       (11 tests)  - Keypair, signing, UID, X25519 ECDH
 ├── protocol_tests.rs     (10 tests)  - Envelopes, serialization
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
-├── storage_tests.rs      (51 tests)  - Tokens, AppState, Settings
+├── storage_tests.rs      (51 tests)  - Tokens (dual pubkeys), AppState, Settings
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection

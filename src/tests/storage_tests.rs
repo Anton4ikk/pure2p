@@ -20,7 +20,7 @@ fn test_contact_creation() {
     let pubkey = vec![1, 2, 3, 4, 5, 6, 7, 8];
     let expiry = Utc::now() + Duration::days(30);
 
-    let contact = Contact::new(uid.clone(), ip.clone(), pubkey.clone(), expiry);
+    let contact = Contact::new(uid.clone(), ip.clone(), pubkey.clone(), vec![99u8; 32], expiry);
 
     assert_eq!(contact.uid, uid);
     assert_eq!(contact.ip, ip);
@@ -36,6 +36,7 @@ fn test_contact_is_expired_future() {
         "test_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -49,6 +50,7 @@ fn test_contact_is_expired_past() {
         "test_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -62,6 +64,7 @@ fn test_contact_activate() {
         "test_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -81,6 +84,7 @@ fn test_contact_deactivate() {
         "test_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -97,6 +101,7 @@ fn test_contact_serialize_deserialize_json() {
         "a1b2c3d4e5f6".to_string(),
         "192.168.1.100:8080".to_string(),
         vec![10, 20, 30, 40, 50],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -121,6 +126,7 @@ fn test_contact_serialize_deserialize_cbor() {
         "x9y8z7w6v5u4".to_string(),
         "10.0.0.1:9000".to_string(),
         vec![100, 101, 102, 103],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -145,6 +151,7 @@ fn test_contact_clone() {
         "clone_test".to_string(),
         "localhost:8080".to_string(),
         vec![1, 2, 3, 4],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -164,6 +171,7 @@ fn test_contact_multiple_activate_deactivate() {
         "test_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32], // x25519_pubkey placeholder
         expiry,
     );
 
@@ -190,7 +198,7 @@ fn test_generate_contact_token() {
     let pubkey = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let expiry = Utc::now() + Duration::days(30);
 
-    let token = generate_contact_token(ip, &pubkey, expiry);
+    let token = generate_contact_token(ip, &pubkey, &vec![99u8; 32], expiry);
 
     // Token should not be empty
     assert!(!token.is_empty());
@@ -206,7 +214,7 @@ fn test_parse_contact_token_roundtrip() {
     let expiry = Utc::now() + Duration::days(7);
 
     // Generate token
-    let token = generate_contact_token(ip, &pubkey, expiry);
+    let token = generate_contact_token(ip, &pubkey, &vec![99u8; 32], expiry);
 
     // Parse token
     let contact = parse_contact_token(&token).expect("Failed to parse valid token");
@@ -229,7 +237,7 @@ fn test_parse_contact_token_expired() {
     let expiry = Utc::now() - Duration::days(1); // Expired yesterday
 
     // Generate token with expired timestamp
-    let token = generate_contact_token(ip, &pubkey, expiry);
+    let token = generate_contact_token(ip, &pubkey, &vec![99u8; 32], expiry);
 
     // Parsing should fail due to expiry
     let result = parse_contact_token(&token);
@@ -280,7 +288,7 @@ fn test_contact_token_with_real_crypto_keys() {
     let expiry = Utc::now() + Duration::days(90);
 
     // Generate token with real public key
-    let token = generate_contact_token(ip, &keypair.public_key, expiry);
+    let token = generate_contact_token(ip, &keypair.public_key, &keypair.x25519_public, expiry);
 
     // Parse token
     let contact = parse_contact_token(&token).expect("Failed to parse token with real keys");
@@ -296,9 +304,9 @@ fn test_contact_token_with_real_crypto_keys() {
 fn test_contact_token_different_inputs_different_tokens() {
     let expiry = Utc::now() + Duration::days(30);
 
-    let token1 = generate_contact_token("192.168.1.1:8080", &[1, 2, 3], expiry);
-    let token2 = generate_contact_token("192.168.1.2:8080", &[1, 2, 3], expiry);
-    let token3 = generate_contact_token("192.168.1.1:8080", &[4, 5, 6], expiry);
+    let token1 = generate_contact_token("192.168.1.1:8080", &[1, 2, 3], &vec![99u8; 32], expiry);
+    let token2 = generate_contact_token("192.168.1.2:8080", &[1, 2, 3], &vec![99u8; 32], expiry);
+    let token3 = generate_contact_token("192.168.1.1:8080", &[4, 5, 6], &vec![99u8; 32], expiry);
 
     // Different IPs should produce different tokens
     assert_ne!(token1, token2);
@@ -314,8 +322,8 @@ fn test_contact_token_deterministic() {
     let expiry = Utc::now() + Duration::days(15);
 
     // Generate token twice with same inputs
-    let token1 = generate_contact_token(ip, &pubkey, expiry);
-    let token2 = generate_contact_token(ip, &pubkey, expiry);
+    let token1 = generate_contact_token(ip, &pubkey, &vec![99u8; 32], expiry);
+    let token2 = generate_contact_token(ip, &pubkey, &vec![99u8; 32], expiry);
 
     // Should produce identical tokens
     assert_eq!(token1, token2);
@@ -448,6 +456,7 @@ fn test_app_state_save_load_json() {
         "test_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3, 4],
+        vec![99u8; 32],
         Utc::now() + Duration::days(30),
     ));
     state.chats.push(Chat::new("test_uid".to_string()));
@@ -482,6 +491,7 @@ fn test_app_state_save_load_cbor() {
         "cbor_uid".to_string(),
         "192.168.1.1:9000".to_string(),
         vec![10, 20, 30],
+        vec![99u8; 32],
         Utc::now() + Duration::days(60),
     ));
     state.settings.max_message_retries = 10;
@@ -535,6 +545,7 @@ fn test_app_state_with_multiple_contacts_and_chats() {
             uid.clone(),
             format!("10.0.0.{}:8080", i),
             vec![i as u8; 10],
+            vec![99u8; 32],
             Utc::now() + Duration::days(30),
         ));
 
@@ -574,6 +585,7 @@ fn test_app_state_json_format_human_readable() {
         "readable_uid".to_string(),
         "127.0.0.1:8080".to_string(),
         vec![1, 2, 3],
+        vec![99u8; 32],
         Utc::now() + Duration::days(7),
     ));
 

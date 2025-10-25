@@ -29,7 +29,7 @@ cargo fmt
 
 ## Core Modules
 
-**`crypto`** - Ed25519 keypairs, SHA-256 UID generation, sign/verify
+**`crypto`** - Ed25519 keypairs (signing/verification), X25519 keypairs (key exchange), SHA-256 UID generation, ECDH shared secret derivation
 
 **`protocol`** - CBOR/JSON message envelopes with UUID, version, timestamps, message types (Text, Delete)
 
@@ -60,7 +60,7 @@ cargo fmt
 
 ## Data Structures
 
-**Contact** - `uid`, `ip`, `pubkey`, `expiry`, `is_active`. Methods: `is_expired()`, `activate()`, `deactivate()`
+**Contact** - `uid`, `ip`, `pubkey`, `x25519_pubkey`, `expiry`, `is_active`. Methods: `is_expired()`, `activate()`, `deactivate()`
 
 **Chat** - `contact_uid`, `messages[]`, `is_active`, `has_pending_messages`. Methods: `append_message()`, `mark_unread()`, `mark_has_pending()`
 
@@ -97,9 +97,13 @@ cargo fmt
 ## Implementation Notes
 
 ### Crypto
-- UIDs deterministic (same pubkey → same UID)
-- Ed25519 keys: 32 bytes (pub/priv), 64 bytes (signature)
-- SHA-256 hash → first 16 bytes as hex
+- **Dual keypairs**: Ed25519 (signing) + X25519 (key exchange), both generated from random bytes
+- **UIDs**: Deterministic SHA-256(Ed25519_pubkey) → first 16 bytes as hex
+- **Ed25519**: 32 bytes (pub/priv), 64 bytes (signature). Used for message authentication
+- **X25519**: 32 bytes (pub/secret), used for ECDH key exchange
+- **Key derivation**: Public key = `x25519(secret, basepoint)` with proper clamping
+- **Shared secrets**: `derive_shared_secret(my_x25519_secret, their_x25519_public)` → 32-byte symmetric key
+- **Token format**: Contact tokens include both Ed25519 pubkey (UID derivation) and X25519 pubkey (encryption)
 
 ### Protocol
 - Version 1, UUIDv4 message IDs, Unix ms timestamps
@@ -118,10 +122,10 @@ cargo fmt
 - Auto-remove after max retries
 
 ### Storage
-- Contact tokens: base64 CBOR (IP, pubkey, expiry)
+- Contact tokens: base64 CBOR (IP, Ed25519 pubkey, X25519 pubkey, expiry)
 - Settings: JSON file, auto-create parent dirs
 - AppState: JSON/CBOR serialization
-- No SQLite yet (placeholder `Storage` struct)
+- Contact struct stores both pubkeys for dual-purpose: identity (Ed25519) and encryption (X25519)
 
 ### Messaging
 - `send_message()` → auto-queue on fail
@@ -171,10 +175,10 @@ cargo fmt
 - Test both success and failure paths
 
 **Test Files:**
-- `crypto_tests.rs` (7 tests) - Keypair generation, signing, UID derivation
+- `crypto_tests.rs` (11 tests) - Keypair generation, signing, UID derivation, X25519 shared secret derivation (symmetric property)
 - `protocol_tests.rs` (10 tests) - Message envelope serialization, versioning
 - `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
-- `storage_tests.rs` (51 tests) - Contact tokens, AppState, Settings persistence
+- `storage_tests.rs` (51 tests) - Contact tokens (with dual pubkeys), AppState, Settings persistence
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
 - `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP protocols, orchestrator, IPv6, CGNAT detection
@@ -185,7 +189,7 @@ cargo fmt
 
 ## Dependencies
 
-**Core:** `ed25519-dalek`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
+**Core:** `ed25519-dalek`, `x25519-dalek`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
 **TUI:** `ratatui`, `crossterm`, `tempfile` (tests)
 
 ## Commit Style

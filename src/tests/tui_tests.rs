@@ -333,8 +333,8 @@ fn test_token_consistency() {
     let local_ip = "192.168.1.100:8080";
     let expiry = Utc::now() + Duration::days(30);
 
-    let token1 = generate_contact_token(local_ip, &keypair.public_key, expiry);
-    let token2 = generate_contact_token(local_ip, &keypair.public_key, expiry);
+    let token1 = generate_contact_token(local_ip, &keypair.public_key, &keypair.x25519_public, expiry);
+    let token2 = generate_contact_token(local_ip, &keypair.public_key, &keypair.x25519_public, expiry);
 
     assert_eq!(
         token1, token2,
@@ -350,8 +350,8 @@ fn test_different_keypairs_different_tokens() {
     let local_ip = "192.168.1.100:8080";
     let expiry = Utc::now() + Duration::days(30);
 
-    let token1 = generate_contact_token(local_ip, &keypair1.public_key, expiry);
-    let token2 = generate_contact_token(local_ip, &keypair2.public_key, expiry);
+    let token1 = generate_contact_token(local_ip, &keypair1.public_key, &keypair1.x25519_public, expiry);
+    let token2 = generate_contact_token(local_ip, &keypair2.public_key, &keypair2.x25519_public, expiry);
 
     assert_ne!(
         token1, token2,
@@ -472,7 +472,7 @@ fn test_import_contact_screen_parse_valid() {
     let keypair = KeyPair::generate().expect("Failed to generate keypair");
     let local_ip = "192.168.1.100:8080";
     let expiry = Utc::now() + Duration::days(30);
-    let token = generate_contact_token(local_ip, &keypair.public_key, expiry);
+    let token = generate_contact_token(local_ip, &keypair.public_key, &keypair.x25519_public, expiry);
 
     let mut screen = ImportContactScreen::new();
     screen.input = token.clone();
@@ -495,7 +495,7 @@ fn test_import_contact_screen_get_contact() {
     let keypair = KeyPair::generate().expect("Failed to generate keypair");
     let local_ip = "192.168.1.100:8080";
     let expiry = Utc::now() + Duration::days(30);
-    let token = generate_contact_token(local_ip, &keypair.public_key, expiry);
+    let token = generate_contact_token(local_ip, &keypair.public_key, &keypair.x25519_public, expiry);
 
     let mut screen = ImportContactScreen::new();
 
@@ -1429,6 +1429,7 @@ fn test_status_indicators_priority_expired_contact() {
         "alice_uid".to_string(),
         "192.168.1.100:8080".to_string(),
         vec![1, 2, 3, 4],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() - Duration::hours(1), // Expired 1 hour ago
     );
     app.app_state.contacts.push(contact);
@@ -1458,6 +1459,7 @@ fn test_status_indicators_priority_pending_messages() {
         "bob_uid".to_string(),
         "192.168.1.101:8080".to_string(),
         vec![5, 6, 7, 8],
+        vec![99u8; 32], // x25519_pubkey placeholder
         chrono::Utc::now() + chrono::Duration::days(30),
     );
     app.app_state.contacts.push(contact);
@@ -1481,6 +1483,7 @@ fn test_status_indicators_priority_active_chat() {
         "charlie_uid".to_string(),
         "192.168.1.102:8080".to_string(),
         vec![9, 10, 11, 12],
+        vec![99u8; 32], // x25519_pubkey placeholder
         chrono::Utc::now() + chrono::Duration::days(30),
     );
     app.app_state.contacts.push(contact);
@@ -1514,6 +1517,7 @@ fn test_contact_expiry_check() {
         "expired_uid".to_string(),
         "192.168.1.100:8080".to_string(),
         vec![1, 2, 3, 4],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() - Duration::hours(1),
     );
     assert!(expired_contact.is_expired(), "Contact should be expired");
@@ -1523,6 +1527,7 @@ fn test_contact_expiry_check() {
         "valid_uid".to_string(),
         "192.168.1.101:8080".to_string(),
         vec![5, 6, 7, 8],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
     assert!(!valid_contact.is_expired(), "Contact should not be expired");
@@ -1555,6 +1560,7 @@ fn test_multiple_chats_different_states() {
         "expired_uid".to_string(),
         "192.168.1.100:8080".to_string(),
         vec![1, 2, 3, 4],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() - Duration::hours(1),
     );
     app.app_state.contacts.push(expired_contact);
@@ -1566,6 +1572,7 @@ fn test_multiple_chats_different_states() {
         "pending_uid".to_string(),
         "192.168.1.101:8080".to_string(),
         vec![5, 6, 7, 8],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
     app.app_state.contacts.push(pending_contact);
@@ -1577,6 +1584,7 @@ fn test_multiple_chats_different_states() {
         "active_uid".to_string(),
         "192.168.1.102:8080".to_string(),
         vec![9, 10, 11, 12],
+        vec![99u8; 32], // x25519_pubkey placeholder
         Utc::now() + Duration::days(30),
     );
     app.app_state.contacts.push(active_contact);
