@@ -95,8 +95,6 @@ cargo check                    # Fast compile check
 # Test
 cargo test                     # All tests (297 total)
 cargo test --lib               # Library tests only
-cargo test crypto              # Specific module
-cargo test cgnat               # CGNAT detection tests
 cargo test -- --nocapture      # Show output
 cargo test -- --test-threads=1 # Sequential (if needed)
 
@@ -150,12 +148,6 @@ src/tests/
 ├── tui_tests.rs          (117 tests) - All TUI screens/logic, Diagnostics with CGNAT
 └── lib_tests.rs          (1 test)    - Library init
 ```
-
-**Benefits:**
-- ✅ Clean separation of code and tests
-- ✅ Easier navigation and maintenance
-- ✅ TUI logic testable (in library, not binary)
-- ✅ Binary (`src/bin/tui.rs`) needs no tests - it's glue code
 
 **Run specific test file:**
 ```bash

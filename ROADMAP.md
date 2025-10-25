@@ -6,56 +6,6 @@ Development timeline and planned features.
 
 ---
 
-## ✅ v0.1 - Foundation (COMPLETED)
-
-**Released:** Core P2P messaging with TUI client
-
-### Implemented
-- Ed25519 keypairs, UID derivation, CBOR/JSON serialization
-- HTTP transport (`/output`, `/ping`, `/message`)
-- SQLite queue with exponential backoff + startup retry
-- Contact/Chat structures, token system (base64 CBOR)
-- AppState persistence (JSON/CBOR)
-- Settings management (auto-save, thread-safe)
-- Messaging API (send, auto-queue, chat lifecycle, smart delete)
-
-**TUI Features:**
-- Main menu, share/import contacts
-- Chat list (● ⌛ ⚠ ○ status badges)
-- Chat view, delete with confirmation
-- Settings editor, startup sync progress
-
-### Limitations
-- No encryption (plaintext) → v0.3
-- No persistent storage (SQLite pending) → v0.2
-- Text-only → v0.4
-- No NAT traversal → v0.3
-
----
-
-## 🔨 v0.2 - TUI Interface (COMPLETED)
-
-**Focus:** Terminal user interface
-
-### Completed
-- **TUI Client**
-  - [x] Screen-based state machine with ratatui
-  - [x] Main menu navigation
-  - [x] Contact share/import with QR-like tokens
-  - [x] Chat list with status badges
-  - [x] Chat view with message history
-  - [x] Settings editor with auto-save
-  - [x] Startup sync progress
-  - [x] Comprehensive keyboard navigation
-
-- **Storage Foundation**
-  - [x] AppState persistence (JSON/CBOR)
-  - [x] Contact/Chat structures
-  - [x] Settings management
-  - [x] Token generation system
-
----
-
 ## 🔐 v0.3 - NAT Traversal
 
 **Focus:** P2P across NAT + E2E encryption
