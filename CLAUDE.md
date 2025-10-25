@@ -29,13 +29,13 @@ cargo fmt
 
 ## Core Modules
 
-**`crypto`** - Ed25519 keypairs (signing/verification), X25519 keypairs (key exchange), SHA-256 UID generation, ECDH shared secret derivation
+**`crypto`** - Ed25519 keypairs (signing/verification), X25519 keypairs (key exchange), SHA-256 UID generation, ECDH shared secret derivation, XChaCha20-Poly1305 AEAD encryption, Ed25519 token signing
 
-**`protocol`** - CBOR/JSON message envelopes with UUID, version, timestamps, message types (Text, Delete)
+**`protocol`** - CBOR/JSON message envelopes with UUID, version, timestamps, message types (Text, Delete), E2E encryption support (encrypted flag + ciphertext)
 
 **`transport`** - HTTP/1.1 server with `/output`, `/ping`, `/message` endpoints. Peer management, delivery tracking.
 
-**`storage`** - Contact/Chat structures, token generation (base64 CBOR), AppState persistence (JSON/CBOR), Settings with auto-save
+**`storage`** - Contact/Chat structures, signed contact token generation (base64 CBOR + Ed25519 signature), AppState persistence (JSON/CBOR), Settings with auto-save
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
 
@@ -99,16 +99,20 @@ cargo fmt
 ### Crypto
 - **Dual keypairs**: Ed25519 (signing) + X25519 (key exchange), both generated from random bytes
 - **UIDs**: Deterministic SHA-256(Ed25519_pubkey) → first 16 bytes as hex
-- **Ed25519**: 32 bytes (pub/priv), 64 bytes (signature). Used for message authentication
+- **Ed25519**: 32 bytes (pub/priv), 64 bytes (signature). Used for message authentication and token signing
 - **X25519**: 32 bytes (pub/secret), used for ECDH key exchange
 - **Key derivation**: Public key = `x25519(secret, basepoint)` with proper clamping
 - **Shared secrets**: `derive_shared_secret(my_x25519_secret, their_x25519_public)` → 32-byte symmetric key
-- **Token format**: Contact tokens include both Ed25519 pubkey (UID derivation) and X25519 pubkey (encryption)
+- **AEAD Encryption**: XChaCha20-Poly1305 with 24-byte nonces, 16-byte Poly1305 auth tags
+- **Token signing**: `sign_contact_token()` creates 64-byte Ed25519 signatures, `verify_contact_token()` verifies integrity
+- **EncryptedEnvelope**: `{nonce: [u8; 24], ciphertext: Vec<u8>}` with embedded auth tag
 
 ### Protocol
 - Version 1, UUIDv4 message IDs, Unix ms timestamps
 - CBOR for production, JSON for debug
-- Convenience: `new_text()`, `new_delete()`
+- **Encryption support**: `encrypted: bool` flag, payload contains `EncryptedEnvelope` (CBOR) when true
+- Convenience: `new_text()`, `new_delete()` (plaintext), `new_text_encrypted()`, `new_delete_encrypted()`
+- Methods: `decrypt_payload(secret)` for decryption, `get_payload(optional_secret)` for transparent access
 
 ### Transport
 - Hyper HTTP/1.1 server/client
@@ -122,7 +126,8 @@ cargo fmt
 - Auto-remove after max retries
 
 ### Storage
-- Contact tokens: base64 CBOR (IP, Ed25519 pubkey, X25519 pubkey, expiry)
+- **Contact tokens**: Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
+- **Token security**: Signature verified on import, rejects tampered/forged tokens
 - Settings: JSON file, auto-create parent dirs
 - AppState: JSON/CBOR serialization
 - Contact struct stores both pubkeys for dual-purpose: identity (Ed25519) and encryption (X25519)
@@ -176,17 +181,17 @@ cargo fmt
 - Organized in subdirectories mirroring module structure
 
 **Test Organization:**
-- `crypto_tests.rs` (11 tests) - Keypair generation, signing, UID derivation, X25519 shared secret
-- `protocol_tests.rs` (10 tests) - Message envelope serialization, versioning
+- `crypto_tests.rs` (27 tests) - Keypair generation, signing, UID derivation, X25519 shared secret, AEAD encryption (roundtrip, tampering), token signing (valid, invalid, corrupted)
+- `protocol_tests.rs` (25 tests) - Message envelope serialization, versioning, E2E encryption (roundtrip, wrong key, CBOR/JSON, plaintext vs encrypted)
 - `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
 - `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
-**`storage_tests/` (51 tests):**
+**`storage_tests/` (62 tests):**
 - `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
-- `token_tests.rs` (8 tests) - Token generation/parsing (roundtrip, validation, crypto integration)
+- `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
 - `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
 - `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
 - `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
@@ -201,8 +206,8 @@ cargo fmt
 
 ## Dependencies
 
-**Core:** `ed25519-dalek`, `x25519-dalek`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
-**TUI:** `ratatui`, `crossterm`, `tempfile` (tests)
+**Core:** `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
+**TUI:** `ratatui`, `crossterm`, `arboard` (clipboard), `tempfile` (tests)
 
 ## Commit Style
 

@@ -13,7 +13,7 @@ Setup instructions for Pure2P development.
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone and build
-git clone https://github.com/yourusername/pure2p.git
+git clone https://github.com/Anton4ikk/pure2p.git
 cd pure2p
 cargo build --release
 
@@ -105,9 +105,6 @@ cargo check                    # Fast compile check
 
 # Test
 cargo test                     # All tests (297 total)
-cargo test --lib               # Library tests only
-cargo test -- --nocapture      # Show output
-cargo test -- --test-threads=1 # Sequential (if needed)
 
 # Quality
 cargo fmt                      # Format

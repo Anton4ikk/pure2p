@@ -25,9 +25,10 @@ impl ShareContactScreen {
         let token = generate_contact_token(
             local_ip,
             &keypair.public_key,
+            &keypair.private_key,
             &keypair.x25519_public,
             expiry,
-        );
+        ).expect("Failed to generate contact token");
 
         Self {
             token,

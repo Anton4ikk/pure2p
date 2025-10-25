@@ -46,7 +46,7 @@ A **radically honest P2P messenger** that prioritizes privacy over convenience.
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Build and run
-git clone https://github.com/yourusername/pure2p.git
+git clone https://github.com/Anton4ikk/pure2p.git
 cd pure2p
 cargo run --bin pure2p-tui
 ```
