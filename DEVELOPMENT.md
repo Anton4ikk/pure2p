@@ -56,6 +56,7 @@ src/
 │   ├── natpmp.rs       # NAT-PMP (RFC 6886)
 │   ├── upnp.rs         # UPnP IGD implementation
 │   ├── ipv6.rs         # IPv6 direct connectivity detection
+│   ├── cgnat.rs        # CGNAT detection (RFC 6598, 100.64.0.0/10)
 │   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP
 │   └── manager.rs      # PortMappingManager, UpnpMappingManager
 ├── tui/                # TUI module (library)
@@ -64,7 +65,7 @@ src/
 │   ├── screens.rs      # Screen state structs
 │   ├── app.rs          # App business logic
 │   └── ui.rs           # Rendering functions
-├── tests/              # Unit tests (285 tests)
+├── tests/              # Unit tests (297 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -72,7 +73,7 @@ src/
 │   ├── storage_tests.rs
 │   ├── queue_tests.rs
 │   ├── messaging_tests.rs
-│   ├── connectivity_tests.rs
+│   ├── connectivity_tests.rs  # Includes CGNAT detection
 │   ├── tui_tests.rs
 │   └── lib_tests.rs
 └── bin/
@@ -92,11 +93,10 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (285 total)
+cargo test                     # All tests (297 total)
 cargo test --lib               # Library tests only
 cargo test crypto              # Specific module
-cargo test connectivity        # Connectivity module (26 tests)
-cargo test tui_tests           # TUI tests (113 tests)
+cargo test cgnat               # CGNAT detection tests
 cargo test -- --nocapture      # Show output
 cargo test -- --test-threads=1 # Sequential (if needed)
 
@@ -146,8 +146,8 @@ src/tests/
 ├── storage_tests.rs      (51 tests)  - Tokens, AppState, Settings
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
-├── connectivity_tests.rs (26 tests)  - PCP, NAT-PMP, UPnP, IPv6, orchestrator
-├── tui_tests.rs          (113 tests) - All TUI screens/logic
+├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
+├── tui_tests.rs          (117 tests) - All TUI screens/logic, Diagnostics with CGNAT
 └── lib_tests.rs          (1 test)    - Library init
 ```
 

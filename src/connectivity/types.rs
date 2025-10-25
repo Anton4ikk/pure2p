@@ -90,6 +90,8 @@ pub struct ConnectivityResult {
     pub upnp: StrategyAttempt,
     /// Final successful mapping (if any)
     pub mapping: Option<PortMappingResult>,
+    /// Whether CGNAT was detected (external IP in 100.64.0.0/10 range)
+    pub cgnat_detected: bool,
 }
 
 impl ConnectivityResult {
@@ -101,6 +103,7 @@ impl ConnectivityResult {
             natpmp: StrategyAttempt::NotAttempted,
             upnp: StrategyAttempt::NotAttempted,
             mapping: None,
+            cgnat_detected: false,
         }
     }
 
@@ -112,6 +115,11 @@ impl ConnectivityResult {
     /// Get a summary string of all attempts (for UX display)
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
+
+        // Add CGNAT warning first if detected
+        if self.cgnat_detected {
+            parts.push("⚠️  CGNAT".to_string());
+        }
 
         match &self.ipv6 {
             StrategyAttempt::NotAttempted => parts.push("IPv6: not checked".to_string()),

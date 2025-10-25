@@ -1,5 +1,6 @@
 //! Connectivity orchestrator - unified strategy selection
 
+use super::cgnat::detect_cgnat;
 use super::ipv6::check_ipv6_connectivity;
 use super::natpmp::try_natpmp_mapping;
 use super::pcp::try_pcp_mapping;
@@ -56,6 +57,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
     match check_ipv6_connectivity(port).await {
         Ok(mapping) => {
             info!("IPv6 connectivity successful");
+            result.cgnat_detected = detect_cgnat(mapping.external_ip);
             result.ipv6 = StrategyAttempt::Success(mapping.clone());
             result.mapping = Some(mapping);
             return result; // Early return - IPv6 is best
@@ -71,6 +73,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
     match try_pcp_mapping(port, lifetime_secs).await {
         Ok(mapping) => {
             info!("PCP mapping successful");
+            result.cgnat_detected = detect_cgnat(mapping.external_ip);
             result.pcp = StrategyAttempt::Success(mapping.clone());
             result.mapping = Some(mapping);
             return result; // Early return - found a working method
@@ -86,6 +89,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
     match try_natpmp_mapping(port, lifetime_secs).await {
         Ok(mapping) => {
             info!("NAT-PMP mapping successful");
+            result.cgnat_detected = detect_cgnat(mapping.external_ip);
             result.natpmp = StrategyAttempt::Success(mapping.clone());
             result.mapping = Some(mapping);
             return result; // Early return - found a working method
@@ -101,6 +105,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
     match try_upnp_mapping(port, lifetime_secs).await {
         Ok(mapping) => {
             info!("UPnP mapping successful");
+            result.cgnat_detected = detect_cgnat(mapping.external_ip);
             result.upnp = StrategyAttempt::Success(mapping.clone());
             result.mapping = Some(mapping);
             return result; // Success!

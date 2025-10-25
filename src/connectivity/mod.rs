@@ -10,6 +10,7 @@
 //! and manages mapping lifecycle including renewal.
 
 // Submodules
+pub mod cgnat;
 pub mod gateway;
 pub mod ipv6;
 pub mod manager;
@@ -26,6 +27,7 @@ pub use types::{
 };
 
 // Re-export main functions
+pub use cgnat::{detect_cgnat, is_private_ip};
 pub use natpmp::{try_natpmp_mapping, try_natpmp_mapping_with_protocol};
 pub use orchestrator::establish_connectivity;
 pub use pcp::{try_pcp_mapping, try_pcp_mapping_with_protocol};

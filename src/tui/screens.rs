@@ -388,6 +388,8 @@ pub struct DiagnosticsScreen {
     pub natpmp_status: Option<Result<crate::connectivity::PortMappingResult, String>>,
     /// UPnP mapping status
     pub upnp_status: Option<Result<crate::connectivity::PortMappingResult, String>>,
+    /// Whether CGNAT was detected
+    pub cgnat_detected: bool,
     /// Whether diagnostics are being refreshed
     pub is_refreshing: bool,
     /// Status message
@@ -403,6 +405,7 @@ impl DiagnosticsScreen {
             pcp_status: None,
             natpmp_status: None,
             upnp_status: None,
+            cgnat_detected: false,
             is_refreshing: false,
             status_message: None,
             local_port,
@@ -434,6 +437,58 @@ impl DiagnosticsScreen {
     /// Set status message
     pub fn set_status_message(&mut self, message: String) {
         self.status_message = Some(message);
+    }
+
+    /// Set CGNAT detection status
+    pub fn set_cgnat_detected(&mut self, detected: bool) {
+        self.cgnat_detected = detected;
+    }
+
+    /// Update diagnostics from ConnectivityResult
+    pub fn update_from_connectivity_result(&mut self, result: &crate::connectivity::ConnectivityResult) {
+        // Update CGNAT detection
+        self.cgnat_detected = result.cgnat_detected;
+
+        // Update individual protocol statuses
+        match &result.ipv6 {
+            crate::connectivity::StrategyAttempt::Success(mapping) => {
+                // IPv6 succeeded, no need to test other protocols
+                self.pcp_status = Some(Ok(mapping.clone()));
+            }
+            _ => {}
+        }
+
+        match &result.pcp {
+            crate::connectivity::StrategyAttempt::Success(mapping) => {
+                self.pcp_status = Some(Ok(mapping.clone()));
+            }
+            crate::connectivity::StrategyAttempt::Failed(e) => {
+                self.pcp_status = Some(Err(e.clone()));
+            }
+            crate::connectivity::StrategyAttempt::NotAttempted => {}
+        }
+
+        match &result.natpmp {
+            crate::connectivity::StrategyAttempt::Success(mapping) => {
+                self.natpmp_status = Some(Ok(mapping.clone()));
+            }
+            crate::connectivity::StrategyAttempt::Failed(e) => {
+                self.natpmp_status = Some(Err(e.clone()));
+            }
+            crate::connectivity::StrategyAttempt::NotAttempted => {}
+        }
+
+        match &result.upnp {
+            crate::connectivity::StrategyAttempt::Success(mapping) => {
+                self.upnp_status = Some(Ok(mapping.clone()));
+            }
+            crate::connectivity::StrategyAttempt::Failed(e) => {
+                self.upnp_status = Some(Err(e.clone()));
+            }
+            crate::connectivity::StrategyAttempt::NotAttempted => {}
+        }
+
+        self.is_refreshing = false;
     }
 }
 

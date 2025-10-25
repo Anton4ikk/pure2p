@@ -1090,7 +1090,7 @@ fn render_diagnostics(f: &mut Frame, app: &App) {
         f.render_widget(upnp_widget, chunks[3]);
 
         // Additional info
-        let info_text = vec![
+        let mut info_text = vec![
             Line::from(vec![
                 Span::styled("Local Port: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -1099,11 +1099,28 @@ fn render_diagnostics(f: &mut Frame, app: &App) {
                 ),
             ]),
             Line::from(""),
-            Line::from(Span::styled(
+        ];
+
+        // Add CGNAT warning if detected
+        if screen.cgnat_detected {
+            info_text.push(Line::from(Span::styled(
+                "⚠️  CGNAT detected. Relay required.",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+            info_text.push(Line::from(Span::styled(
+                "Your external IP is in the CGNAT range (100.64.0.0/10).",
+                Style::default().fg(Color::Yellow),
+            )));
+            info_text.push(Line::from(Span::styled(
+                "Direct P2P connectivity is not possible.",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else {
+            info_text.push(Line::from(Span::styled(
                 "Port mapping allows peers to connect to you directly",
                 Style::default().fg(Color::DarkGray),
-            )),
-        ];
+            )));
+        }
 
         let info_widget = Paragraph::new(info_text)
             .alignment(Alignment::Center)

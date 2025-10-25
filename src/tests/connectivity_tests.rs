@@ -430,3 +430,57 @@ fn test_mapping_protocol_ipv6_variant() {
 //     // Verify at least one protocol was attempted
 //     assert!(matches!(result.ipv6, StrategyAttempt::Failed(_) | StrategyAttempt::Success(_)));
 // }
+
+// CGNAT Detection Tests
+
+#[test]
+fn test_connectivity_result_cgnat_detected_in_summary() {
+    let mut result = ConnectivityResult::new();
+    result.cgnat_detected = true;
+    result.pcp = StrategyAttempt::Failed("timeout".to_string());
+
+    let summary = result.summary();
+    assert!(summary.contains("⚠️  CGNAT"), "Summary should contain CGNAT warning");
+}
+
+#[test]
+fn test_connectivity_result_no_cgnat_in_summary() {
+    let mut result = ConnectivityResult::new();
+    result.cgnat_detected = false;
+    result.pcp = StrategyAttempt::Failed("timeout".to_string());
+
+    let summary = result.summary();
+    assert!(!summary.contains("CGNAT"), "Summary should not contain CGNAT when not detected");
+}
+
+#[test]
+fn test_connectivity_result_new_has_cgnat_false() {
+    let result = ConnectivityResult::new();
+    assert!(!result.cgnat_detected, "New ConnectivityResult should have cgnat_detected=false");
+}
+
+#[test]
+fn test_connectivity_result_with_cgnat_serialization() {
+    use crate::connectivity::MappingProtocol;
+    use chrono::Utc;
+
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)), // CGNAT IP
+        external_port: 60000,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::PCP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.cgnat_detected = true;
+    result.pcp = StrategyAttempt::Success(mapping.clone());
+    result.mapping = Some(mapping);
+
+    // Test JSON serialization
+    let json = serde_json::to_string(&result).unwrap();
+    let deserialized: ConnectivityResult = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(result.cgnat_detected, deserialized.cgnat_detected);
+    assert!(deserialized.cgnat_detected, "CGNAT detection should survive serialization");
+}

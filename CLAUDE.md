@@ -48,6 +48,7 @@ cargo fmt
 - `natpmp.rs` - NAT-PMP (RFC 6886) implementation
 - `upnp.rs` - UPnP IGD implementation
 - `ipv6.rs` - IPv6 direct connectivity detection
+- `cgnat.rs` - CGNAT detection (RFC 6598, 100.64.0.0/10 range), private IP helpers
 - `orchestrator.rs` - Main `establish_connectivity()` function with automatic fallback
 - `manager.rs` - PortMappingManager (PCP auto-renewal), UpnpMappingManager (cleanup)
 
@@ -87,7 +88,7 @@ cargo fmt
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter
 7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
-8. **Diagnostics** - Port forwarding status (PCP, NAT-PMP, UPnP)
+8. **Diagnostics** - Port forwarding status (PCP, NAT-PMP, UPnP), CGNAT detection warning
 
 **Keyboard:** q/Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
 
@@ -130,29 +131,32 @@ cargo fmt
 
 ### Connectivity
 
-**Module Architecture** (9 files, ~150-400 lines each):
-- `types.rs` - Shared types: PortMappingResult, MappingError, ConnectivityResult, StrategyAttempt, IpProtocol
+**Module Architecture** (10 files, ~150-400 lines each):
+- `types.rs` - Shared types: PortMappingResult, MappingError, ConnectivityResult (with cgnat_detected field), StrategyAttempt, IpProtocol
 - `gateway.rs` - Cross-platform gateway discovery (Linux/macOS/Windows)
 - `pcp.rs` - PCP implementation with PcpOpcode, PcpResultCode enums
 - `natpmp.rs` - NAT-PMP implementation with NatPmpOpcode, NatPmpResultCode enums
 - `upnp.rs` - UPnP IGD with blocking operations
 - `ipv6.rs` - IPv6 detection helpers (check_ipv6_connectivity, is_ipv6_link_local)
+- `cgnat.rs` - CGNAT detection: detect_cgnat(ip) checks 100.64.0.0/10 range, is_private_ip(ip) helper
 - `orchestrator.rs` - Main `establish_connectivity()` function
 - `manager.rs` - PortMappingManager (PCP), UpnpMappingManager (UPnP)
 - `mod.rs` - Public API with re-exports
 
 **Orchestrator Behavior**:
 - `establish_connectivity(port)` tries IPv6 → PCP → NAT-PMP → UPnP sequentially
-- Returns `ConnectivityResult` with full tracking of all attempts
+- Returns `ConnectivityResult` with full tracking of all attempts + CGNAT detection
 - Each protocol gets `StrategyAttempt`: NotAttempted | Success(mapping) | Failed(error)
 - Stops on first success, continues through all on failure
-- `result.summary()` generates UX string: "IPv6: no → PCP: ok → external 203.0.113.5:60000"
+- `result.summary()` generates UX string: "⚠️ CGNAT → IPv6: no → PCP: ok" (if CGNAT detected)
+- CGNAT detection runs automatically after each successful mapping
 
 **Protocol Details**:
 - **PCP** (RFC 6887): 60-byte MAP requests, up to 1100-byte responses, UDP port 5351
 - **NAT-PMP** (RFC 6886): 12-byte requests, 16-byte responses, requires separate external IP request
 - **UPnP**: SSDP discovery + SOAP, blocking I/O spawned to tokio::task::spawn_blocking
 - **IPv6**: Binds to `[::]`, connects to public IPv6 (2001:4860:4860::8888) to verify global address
+- **CGNAT** (RFC 6598): Detects 100.64.0.0/10 range, warns user that relay is required for P2P
 
 **Lifecycle Management**:
 - `PortMappingManager`: Auto-renews PCP mappings at 80% of lifetime (e.g., 48 min for 1 hour)
@@ -162,7 +166,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests extracted to `src/tests/` directory (285 total tests)
+- All tests extracted to `src/tests/` directory (297 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 
@@ -173,8 +177,8 @@ cargo fmt
 - `storage_tests.rs` (51 tests) - Contact tokens, AppState, Settings persistence
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (26 tests) - PCP, NAT-PMP, UPnP protocols, orchestrator, IPv6 detection
-- `tui_tests.rs` (113 tests) - All TUI screens, App state, navigation
+- `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP protocols, orchestrator, IPv6, CGNAT detection
+- `tui_tests.rs` (117 tests) - All TUI screens, App state, navigation, Diagnostics with CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
 **Note:** Binary (`src/bin/tui.rs`) has no tests - it's just glue code. All logic is tested in `tui_tests.rs`.

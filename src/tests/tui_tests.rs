@@ -1778,3 +1778,83 @@ fn test_startup_sync_screen_zero_messages() {
     assert!(screen.is_complete); // Should be complete immediately
     assert_eq!(screen.get_progress_percentage(), 100);
 }
+
+// Diagnostics Screen Tests
+
+#[test]
+fn test_diagnostics_screen_new() {
+    let screen = DiagnosticsScreen::new(8080);
+
+    assert_eq!(screen.local_port, 8080);
+    assert!(!screen.cgnat_detected);
+    assert!(!screen.is_refreshing);
+    assert!(screen.pcp_status.is_none());
+    assert!(screen.natpmp_status.is_none());
+    assert!(screen.upnp_status.is_none());
+}
+
+#[test]
+fn test_diagnostics_screen_set_cgnat_detected() {
+    let mut screen = DiagnosticsScreen::new(8080);
+    assert!(!screen.cgnat_detected);
+
+    screen.set_cgnat_detected(true);
+    assert!(screen.cgnat_detected);
+
+    screen.set_cgnat_detected(false);
+    assert!(!screen.cgnat_detected);
+}
+
+#[test]
+fn test_diagnostics_screen_update_from_connectivity_result() {
+    use crate::connectivity::{ConnectivityResult, StrategyAttempt, PortMappingResult, MappingProtocol};
+    use std::net::{IpAddr, Ipv4Addr};
+    use chrono::Utc;
+
+    let mut screen = DiagnosticsScreen::new(8080);
+
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)), // CGNAT IP
+        external_port: 60000,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::PCP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.cgnat_detected = true;
+    result.pcp = StrategyAttempt::Success(mapping.clone());
+    result.natpmp = StrategyAttempt::Failed("No gateway".to_string());
+    result.mapping = Some(mapping);
+
+    screen.update_from_connectivity_result(&result);
+
+    assert!(screen.cgnat_detected, "CGNAT should be detected");
+    assert!(!screen.is_refreshing, "Should not be refreshing after update");
+    assert!(screen.pcp_status.is_some(), "PCP status should be set");
+    assert!(screen.natpmp_status.is_some(), "NAT-PMP status should be set");
+
+    // Verify PCP succeeded
+    if let Some(Ok(pcp_mapping)) = &screen.pcp_status {
+        assert_eq!(pcp_mapping.external_port, 60000);
+    } else {
+        panic!("Expected PCP success status");
+    }
+
+    // Verify NAT-PMP failed
+    if let Some(Err(error)) = &screen.natpmp_status {
+        assert!(error.contains("No gateway"));
+    } else {
+        panic!("Expected NAT-PMP error status");
+    }
+}
+
+#[test]
+fn test_diagnostics_screen_start_refresh() {
+    let mut screen = DiagnosticsScreen::new(8080);
+    assert!(!screen.is_refreshing);
+
+    screen.start_refresh();
+    assert!(screen.is_refreshing);
+    assert!(screen.status_message.is_some());
+}
