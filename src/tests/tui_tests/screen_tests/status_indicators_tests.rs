@@ -2,11 +2,14 @@
 
 use crate::storage::Contact;
 use crate::tui::App;
+use tempfile::TempDir;
 use chrono::{Duration, Utc};
 
 #[test]
 fn test_status_indicators_priority_expired_contact() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
 
     // Add a chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -34,7 +37,9 @@ fn test_status_indicators_priority_expired_contact() {
 
 #[test]
 fn test_status_indicators_priority_pending_messages() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
 
     // Add a chat with pending messages
     app.app_state.add_chat("bob_uid".to_string());
@@ -58,7 +63,9 @@ fn test_status_indicators_priority_pending_messages() {
 
 #[test]
 fn test_status_indicators_priority_active_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
 
     // Add an active chat (new messages)
     app.app_state.add_chat("charlie_uid".to_string());
@@ -83,7 +90,9 @@ fn test_status_indicators_priority_active_chat() {
 
 #[test]
 fn test_status_indicators_priority_inactive_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
 
     // Add an inactive chat (read/no new messages)
     app.app_state.add_chat("dave_uid".to_string());
@@ -120,7 +129,9 @@ fn test_contact_expiry_check() {
 
 #[test]
 fn test_chat_with_no_matching_contact() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
 
     // Add a chat without adding a corresponding contact
     app.app_state.add_chat("orphan_uid".to_string());
@@ -135,7 +146,9 @@ fn test_chat_with_no_matching_contact() {
 
 #[test]
 fn test_multiple_chats_different_states() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
 
     // Chat 1: Expired contact
     app.app_state.add_chat("expired_uid".to_string());
@@ -189,7 +202,9 @@ fn test_multiple_chats_different_states() {
 
 #[test]
 fn test_chat_pending_flag_methods() {
-    let mut app = App::new().expect("Failed to create app");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let mut app = App::new_with_settings(Some(&settings_path)).expect("Failed to create app");
     app.app_state.add_chat("test_uid".to_string());
 
     // Initially no pending messages

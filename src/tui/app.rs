@@ -46,10 +46,32 @@ pub struct App {
 
 impl App {
     /// Create new application
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    ///
+    /// # Arguments
+    /// * `settings_path` - Optional path to settings file. Defaults to "settings.json" if None.
+    ///                     Used primarily for testing to avoid polluting user's settings.
+    pub fn new_with_settings<P: AsRef<std::path::Path>>(settings_path: Option<P>) -> Result<Self, Box<dyn std::error::Error>> {
         let keypair = KeyPair::generate()?;
         let local_ip = Self::get_local_ip();
-        let app_state = AppState::new();
+
+        // Load or create settings
+        let settings_path = settings_path.as_ref()
+            .map(|p| p.as_ref().to_string_lossy().to_string())
+            .unwrap_or_else(|| "settings.json".to_string());
+
+        let settings = if !std::path::Path::new(&settings_path).exists() {
+            // First run: create and save default settings
+            let default_settings = crate::storage::Settings::default();
+            let _ = default_settings.save(&settings_path); // Ignore save errors on first run
+            default_settings
+        } else {
+            // Load existing settings, fall back to defaults on error
+            crate::storage::Settings::load(&settings_path).unwrap_or_default()
+        };
+
+        // Create app state with loaded settings
+        let mut app_state = AppState::new();
+        app_state.settings = settings;
 
         // Simulate checking for pending messages
         // In a real implementation, this would query the MessageQueue
@@ -87,6 +109,14 @@ impl App {
         })
     }
 
+    /// Create new application with default settings path
+    ///
+    /// This is a convenience wrapper around `new_with_settings(None)`.
+    /// For production use, settings will be stored in "settings.json" in the project root.
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_settings(None::<&str>)
+    }
+
     /// Trigger startup connectivity diagnostics (non-blocking)
     ///
     /// Should be called after App::new() to detect external IP for contact sharing.
@@ -121,7 +151,10 @@ impl App {
                         if let Some(mapping) = &result.mapping {
                             self.local_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
                         }
-                        self.connectivity_result = Some(result);
+                        self.connectivity_result = Some(result.clone());
+
+                        // Apply result to diagnostics screen if it's already open
+                        self.apply_connectivity_result(result);
                         return true;
                     }
                     Err(_) => {

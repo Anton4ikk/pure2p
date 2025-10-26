@@ -2,30 +2,31 @@
 
 use crate::tui::{App, Screen, MenuItem};
 use crate::storage::Settings;
-use std::sync::Mutex;
+use tempfile::TempDir;
 
-// Global mutex to serialize access to settings.json across all tests
-static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
-
-/// Helper function to ensure settings file exists with consent set (for testing)
-/// This function acquires a lock to prevent race conditions between parallel tests
-fn ensure_consent_set() -> std::sync::MutexGuard<'static, ()> {
-    let guard = SETTINGS_LOCK.lock().unwrap();
-    let settings = Settings::load("settings.json").unwrap_or_default();
-    let _ = settings.save("settings.json");
-    guard
+/// Helper to create an App with temporary settings file
+/// Returns (App, TempDir) - the TempDir must be kept alive for the test duration
+fn create_test_app() -> (App, TempDir) {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    let app = App::new_with_settings(Some(&settings_path))
+        .expect("Failed to create app");
+    (app, temp_dir)
 }
 
-/// Helper to clean up test settings (call AFTER test completes, releases lock)
-fn cleanup_test_settings(_guard: std::sync::MutexGuard<()>) {
-    let _ = std::fs::remove_file("settings.json");
-    // Guard is dropped here, releasing the lock
+/// Helper to create an App with custom settings
+fn create_test_app_with_settings(settings: Settings) -> (App, TempDir) {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+    settings.save(&settings_path).expect("Failed to save settings");
+    let app = App::new_with_settings(Some(&settings_path))
+        .expect("Failed to create app");
+    (app, temp_dir)
 }
 
 #[test]
 fn test_app_initialization() {
-    let _lock = ensure_consent_set();
-    let app = App::new().expect("Failed to create app");
+    let (app, _temp_dir) = create_test_app();
 
     // Verify initial state
     assert_eq!(
@@ -33,8 +34,6 @@ fn test_app_initialization() {
         Screen::MainMenu,
         "Should start on main menu (with consent already set)"
     );
-
-    cleanup_test_settings(_lock);
     assert_eq!(app.selected_index, 0, "Should start with first item selected");
     assert!(!app.should_quit, "Should not be quitting initially");
     assert!(
@@ -50,7 +49,7 @@ fn test_app_initialization() {
 
 #[test]
 fn test_app_navigation() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Test next navigation
     assert_eq!(app.selected_index, 0);
@@ -78,8 +77,7 @@ fn test_app_navigation() {
 
 #[test]
 fn test_app_show_share_contact_screen() {
-    let _lock = ensure_consent_set();
-    let mut app = App::new().expect("Failed to create app");
+let (mut app, _temp_dir) = create_test_app();
 
     // Initially on main menu
     assert_eq!(app.current_screen, Screen::MainMenu);
@@ -99,13 +97,11 @@ fn test_app_show_share_contact_screen() {
     let screen = app.share_contact_screen.as_ref().unwrap();
     assert!(!screen.token.is_empty());
     assert!(screen.expiry > chrono::Utc::now());
-
-    cleanup_test_settings(_lock);
 }
 
 #[test]
 fn test_app_back_to_main_menu() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Show share contact screen
     app.show_share_contact_screen();
@@ -125,7 +121,7 @@ fn test_app_back_to_main_menu() {
 
 #[test]
 fn test_app_select_share_contact() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Select ShareContact item (index 1)
     app.selected_index = 1;
@@ -141,7 +137,7 @@ fn test_app_select_share_contact() {
 
 #[test]
 fn test_app_select_exit() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Navigate to Exit item (index 5)
     app.selected_index = 5;
@@ -157,8 +153,7 @@ fn test_app_select_exit() {
 
 #[test]
 fn test_app_show_import_contact_screen() {
-    let _lock = ensure_consent_set();
-    let mut app = App::new().expect("Failed to create app");
+let (mut app, _temp_dir) = create_test_app();
 
     // Initially on main menu
     assert_eq!(app.current_screen, Screen::MainMenu);
@@ -173,13 +168,11 @@ fn test_app_show_import_contact_screen() {
         app.import_contact_screen.is_some(),
         "Import contact screen should be initialized"
     );
-
-    cleanup_test_settings(_lock);
 }
 
 #[test]
 fn test_app_back_from_import_contact() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Show import contact screen
     app.show_import_contact_screen();
@@ -199,7 +192,7 @@ fn test_app_back_from_import_contact() {
 
 #[test]
 fn test_app_select_import_contact() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Navigate to ImportContact item (index 2)
     app.selected_index = 2;
@@ -215,8 +208,7 @@ fn test_app_select_import_contact() {
 
 #[test]
 fn test_app_show_chat_list_screen() {
-    let _lock = ensure_consent_set();
-    let mut app = App::new().expect("Failed to create app");
+let (mut app, _temp_dir) = create_test_app();
 
     // Initially on main menu
     assert_eq!(app.current_screen, Screen::MainMenu);
@@ -231,13 +223,11 @@ fn test_app_show_chat_list_screen() {
         app.chat_list_screen.is_some(),
         "Chat list screen should be initialized"
     );
-
-    cleanup_test_settings(_lock);
 }
 
 #[test]
 fn test_app_back_from_chat_list() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Show chat list screen
     app.show_chat_list_screen();
@@ -257,7 +247,7 @@ fn test_app_back_from_chat_list() {
 
 #[test]
 fn test_app_select_chat_list() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Navigate to ChatList item (index 0)
     app.selected_index = 0;
@@ -273,7 +263,7 @@ fn test_app_select_chat_list() {
 
 #[test]
 fn test_app_delete_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add some test chats
     app.app_state.add_chat("alice_uid".to_string());
@@ -302,7 +292,7 @@ fn test_app_delete_chat() {
 
 #[test]
 fn test_app_delete_last_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add one chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -321,7 +311,7 @@ fn test_app_delete_last_chat() {
 
 #[test]
 fn test_app_delete_adjusts_selection() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chats
     app.app_state.add_chat("alice_uid".to_string());
@@ -343,7 +333,7 @@ fn test_app_delete_adjusts_selection() {
 
 #[test]
 fn test_app_state_initialized() {
-    let app = App::new().expect("Failed to create app");
+    let (app, _temp_dir) = create_test_app();
 
     assert!(app.app_state.chats.is_empty(), "Should have no chats initially");
     assert!(app.app_state.contacts.is_empty(), "Should have no contacts initially");
@@ -351,7 +341,7 @@ fn test_app_state_initialized() {
 
 #[test]
 fn test_app_open_selected_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add a chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -373,7 +363,7 @@ fn test_app_open_selected_chat() {
 
 #[test]
 fn test_app_back_to_chat_list() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chat and open it
     app.app_state.add_chat("alice_uid".to_string());
@@ -391,7 +381,7 @@ fn test_app_back_to_chat_list() {
 
 #[test]
 fn test_app_send_message() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -428,7 +418,7 @@ fn test_app_send_message() {
 
 #[test]
 fn test_app_send_empty_message() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -449,7 +439,7 @@ fn test_app_send_empty_message() {
 
 #[test]
 fn test_app_multiple_messages() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -483,7 +473,7 @@ fn test_app_multiple_messages() {
 
 #[test]
 fn test_app_show_delete_confirmation() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add some chats
     app.app_state.add_chat("alice_uid".to_string());
@@ -505,7 +495,7 @@ fn test_app_show_delete_confirmation() {
 
 #[test]
 fn test_app_cancel_delete_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -529,7 +519,7 @@ fn test_app_cancel_delete_chat() {
 
 #[test]
 fn test_app_confirm_delete_inactive_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add inactive chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -556,7 +546,7 @@ fn test_app_confirm_delete_inactive_chat() {
 
 #[test]
 fn test_app_confirm_delete_active_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add active chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -583,7 +573,7 @@ fn test_app_confirm_delete_active_chat() {
 
 #[test]
 fn test_app_delete_chat_adjusts_selection() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chats
     app.app_state.add_chat("alice_uid".to_string());
@@ -607,7 +597,7 @@ fn test_app_delete_chat_adjusts_selection() {
 
 #[test]
 fn test_app_delete_middle_chat_keeps_selection() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add chats
     app.app_state.add_chat("alice_uid".to_string());
@@ -633,7 +623,7 @@ fn test_app_delete_middle_chat_keeps_selection() {
 
 #[test]
 fn test_app_delete_only_chat() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add one chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -654,7 +644,7 @@ fn test_app_delete_only_chat() {
 
 #[test]
 fn test_app_delete_empty_list_does_nothing() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Show chat list (with no chats)
     app.show_chat_list_screen();
@@ -668,7 +658,7 @@ fn test_app_delete_empty_list_does_nothing() {
 
 #[test]
 fn test_confirm_delete_with_invalid_index() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Add one chat
     app.app_state.add_chat("alice_uid".to_string());
@@ -693,8 +683,7 @@ fn test_confirm_delete_with_invalid_index() {
 
 #[test]
 fn test_app_show_settings_screen() {
-    let _lock = ensure_consent_set();
-    let mut app = App::new().expect("Failed to create app");
+let (mut app, _temp_dir) = create_test_app();
 
     // Initially on main menu
     assert_eq!(app.current_screen, Screen::MainMenu);
@@ -706,13 +695,11 @@ fn test_app_show_settings_screen() {
     // Verify screen changed
     assert_eq!(app.current_screen, Screen::Settings);
     assert!(app.settings_screen.is_some());
-
-    cleanup_test_settings(_lock);
 }
 
 #[test]
 fn test_app_back_from_settings() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Show settings screen
     app.show_settings_screen();
@@ -729,7 +716,7 @@ fn test_app_back_from_settings() {
 
 #[test]
 fn test_app_select_settings() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Navigate to Settings item (index 4)
     app.selected_index = 4;
@@ -745,19 +732,16 @@ fn test_app_select_settings() {
 
 #[test]
 fn test_app_startup_with_no_pending_messages() {
-    let _lock = ensure_consent_set();
-    let app = App::new().expect("Failed to create app");
+let (app, _temp_dir) = create_test_app();
 
     // With no pending messages and consent set, should start on MainMenu
     assert_eq!(app.current_screen, Screen::MainMenu);
     assert!(app.startup_sync_screen.is_none());
-
-    cleanup_test_settings(_lock);
 }
 
 #[test]
 fn test_app_update_startup_sync() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Manually create a startup sync screen with messages
     app.startup_sync_screen = Some(crate::tui::screens::StartupSyncScreen::new(5));
@@ -774,7 +758,7 @@ fn test_app_update_startup_sync() {
 
 #[test]
 fn test_app_complete_startup_sync() {
-    let mut app = App::new().expect("Failed to create app");
+    let (mut app, _temp_dir) = create_test_app();
 
     // Set up startup sync screen
     app.startup_sync_screen = Some(crate::tui::screens::StartupSyncScreen::new(1));
@@ -785,5 +769,100 @@ fn test_app_complete_startup_sync() {
 
     assert_eq!(app.current_screen, Screen::MainMenu);
     assert!(app.startup_sync_screen.is_none());
+}
+
+#[test]
+fn test_app_creates_settings_on_first_run() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+
+    // Verify file doesn't exist before test
+    assert!(!settings_path.exists(),
+        "settings.json should not exist before first run");
+
+    // Create app (this should trigger settings.json creation)
+    let app = App::new_with_settings(Some(&settings_path))
+        .expect("Failed to create app");
+
+    // Verify settings file was created
+    assert!(settings_path.exists(),
+        "settings.json should be created on first run");
+
+    // Verify settings have default values
+    assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
+        "Should have default retry interval");
+    assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
+        "Should have default contact expiry");
+    assert_eq!(app.app_state.settings.max_message_retries, 5,
+        "Should have default max retries");
+}
+
+#[test]
+fn test_app_loads_existing_settings() {
+    // Create custom settings
+    let mut custom_settings = Settings::default();
+    custom_settings.retry_interval_minutes = 25;
+    custom_settings.global_retry_interval_ms = 25 * 60 * 1000;
+    custom_settings.default_contact_expiry_days = 60;
+
+    // Create app with custom settings
+    let (app, _temp_dir) = create_test_app_with_settings(custom_settings);
+
+    // Verify custom settings were loaded
+    assert_eq!(app.app_state.settings.retry_interval_minutes, 25,
+        "Should load custom retry interval");
+    assert_eq!(app.app_state.settings.default_contact_expiry_days, 60,
+        "Should load custom contact expiry");
+}
+
+#[test]
+fn test_app_falls_back_to_defaults_on_corrupt_settings() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let settings_path = temp_dir.path().join("settings.json");
+
+    // Create a corrupted settings file
+    std::fs::write(&settings_path, "{ invalid json }")
+        .expect("Failed to write corrupt settings");
+
+    // Create app (should fall back to defaults)
+    let app = App::new_with_settings(Some(&settings_path))
+        .expect("Failed to create app");
+
+    // Verify default settings are used
+    assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
+        "Should fall back to default retry interval");
+    assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
+        "Should fall back to default contact expiry");
+}
+
+#[test]
+fn test_app_connectivity_result_starts_as_none() {
+let (app, _temp_dir) = create_test_app();
+
+    // Verify connectivity_result starts as None (diagnostics not run yet)
+    assert!(app.connectivity_result.is_none(),
+        "connectivity_result should be None on initialization");
+    assert!(app.diagnostics_refresh_handle.is_none(),
+        "diagnostics_refresh_handle should be None on initialization");
+}
+
+#[test]
+fn test_app_trigger_startup_connectivity() {
+let (mut app, _temp_dir) = create_test_app();
+
+    // Verify no handle exists initially
+    assert!(app.diagnostics_refresh_handle.is_none());
+
+    // Trigger startup connectivity
+    app.trigger_startup_connectivity();
+
+    // Verify handle was created
+    assert!(app.diagnostics_refresh_handle.is_some(),
+        "diagnostics_refresh_handle should be set after trigger");
+
+    // Calling again should not create a new handle (idempotent)
+    app.trigger_startup_connectivity();
+    assert!(app.diagnostics_refresh_handle.is_some(),
+        "Should not create duplicate handles");
 }
 

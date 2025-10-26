@@ -55,7 +55,8 @@ fn run_app<B: ratatui::backend::Backend>(
         terminal.draw(|f| ui(f, app))?;
 
         // Poll for startup connectivity completion (runs in background on all screens)
-        if app.connectivity_result.is_none() {
+        // BUT: skip if on Diagnostics screen, since poll_diagnostics_result() handles it
+        if app.connectivity_result.is_none() && app.current_screen != Screen::Diagnostics {
             app.poll_startup_connectivity();
         }
 
@@ -73,6 +74,7 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Poll for diagnostics refresh completion
+        // This handles BOTH startup connectivity and manual refresh when on Diagnostics screen
         if app.current_screen == Screen::Diagnostics {
             app.poll_diagnostics_result();
         }

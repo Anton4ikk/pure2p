@@ -14,16 +14,30 @@ use crate::tui::app::App;
 pub fn render_main_menu(f: &mut Frame, app: &App) {
     let size = f.size();
 
-    // Create main layout
+    // Create main layout - adjust based on whether we need to show connectivity warning/error
+    let show_warning = app.connectivity_result.is_none();
+    let show_error = app.connectivity_result.as_ref().map_or(false, |result| !result.is_success());
+    let show_notification = show_warning || show_error;
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
-        .constraints([
-            Constraint::Length(3), // Title
-            Constraint::Length(3), // IP display
-            Constraint::Min(10),   // Menu
-            Constraint::Length(3), // Help text
-        ])
+        .constraints(if show_notification {
+            vec![
+                Constraint::Length(3), // Title
+                Constraint::Length(3), // IP display
+                Constraint::Length(3), // Connectivity warning/error
+                Constraint::Min(10),   // Menu
+                Constraint::Length(3), // Help text
+            ]
+        } else {
+            vec![
+                Constraint::Length(3), // Title
+                Constraint::Length(3), // IP display
+                Constraint::Min(10),   // Menu
+                Constraint::Length(3), // Help text
+            ]
+        })
         .split(size);
 
     // Title
@@ -45,6 +59,38 @@ pub fn render_main_menu(f: &mut Frame, app: &App) {
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL).title("Identity"));
     f.render_widget(ip_widget, chunks[1]);
+
+    // Connectivity warning/error (shown while diagnostics are running or if all failed)
+    let menu_chunk_index = if show_notification {
+        if show_warning {
+            // Warning while connectivity is being configured
+            let warning_text = Line::from(vec![
+                Span::styled("⚠ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("Configuring network connectivity... ", Style::default().fg(Color::Yellow)),
+                Span::styled("Contact sharing may not work until setup completes", Style::default().fg(Color::DarkGray)),
+            ]);
+            let warning_widget = Paragraph::new(warning_text)
+                .style(Style::default().fg(Color::Yellow))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+            f.render_widget(warning_widget, chunks[2]);
+        } else if show_error {
+            // Error when all connectivity attempts failed
+            let error_text = Line::from(vec![
+                Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled("All connectivity attempts failed. ", Style::default().fg(Color::Red)),
+                Span::styled("Go to Diagnostics to see details and retry.", Style::default().fg(Color::DarkGray)),
+            ]);
+            let error_widget = Paragraph::new(error_text)
+                .style(Style::default().fg(Color::Red))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Red)));
+            f.render_widget(error_widget, chunks[2]);
+        }
+        3 // Menu is at index 3 when notification is shown
+    } else {
+        2 // Menu is at index 2 when no notification
+    };
 
     // Menu items
     let menu_items: Vec<ListItem> = app
@@ -78,7 +124,7 @@ pub fn render_main_menu(f: &mut Frame, app: &App) {
             .title("Main Menu")
             .style(Style::default()),
     );
-    f.render_widget(menu, chunks[2]);
+    f.render_widget(menu, chunks[menu_chunk_index]);
 
     // Help text
     let selected = app.selected_item();
@@ -103,5 +149,5 @@ pub fn render_main_menu(f: &mut Frame, app: &App) {
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL));
-    f.render_widget(help, chunks[3]);
+    f.render_widget(help, chunks[menu_chunk_index + 1]);
 }

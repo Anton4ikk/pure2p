@@ -68,6 +68,11 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
             ])
             .split(content_columns[1]);
 
+        // Determine if any mapping succeeded (for color logic)
+        let any_success = screen.pcp_status.as_ref().map_or(false, |r| r.is_ok())
+            || screen.natpmp_status.as_ref().map_or(false, |r| r.is_ok())
+            || screen.upnp_status.as_ref().map_or(false, |r| r.is_ok());
+
         // PCP Status
         let pcp_text = if let Some(result) = &screen.pcp_status {
             match result {
@@ -102,15 +107,17 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
                     ]
                 }
                 Err(e) => {
+                    // Use warning color if any protocol succeeded, error color if all failed
+                    let error_color = if any_success { Color::Yellow } else { Color::Red };
                     vec![
                         Line::from(Span::styled(
                             "PCP: ✗ Failed",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default().fg(error_color).add_modifier(Modifier::BOLD),
                         )),
                         Line::from(""),
                         Line::from(Span::styled(
                             format!("Error: {}", e),
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(error_color),
                         )),
                     ]
                 }
@@ -180,15 +187,17 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
                     ]
                 }
                 Err(e) => {
+                    // Use warning color if any protocol succeeded, error color if all failed
+                    let error_color = if any_success { Color::Yellow } else { Color::Red };
                     vec![
                         Line::from(Span::styled(
                             "NAT-PMP: ✗ Failed",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default().fg(error_color).add_modifier(Modifier::BOLD),
                         )),
                         Line::from(""),
                         Line::from(Span::styled(
                             format!("Error: {}", e),
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(error_color),
                         )),
                     ]
                 }
@@ -259,15 +268,17 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
                     ]
                 }
                 Err(e) => {
+                    // Use warning color if any protocol succeeded, error color if all failed
+                    let error_color = if any_success { Color::Yellow } else { Color::Red };
                     vec![
                         Line::from(Span::styled(
                             "UPnP: ✗ Failed",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default().fg(error_color).add_modifier(Modifier::BOLD),
                         )),
                         Line::from(""),
                         Line::from(Span::styled(
                             format!("Error: {}", e),
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(error_color),
                         )),
                     ]
                 }
