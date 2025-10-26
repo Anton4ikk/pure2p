@@ -50,15 +50,15 @@ src/
 ├── transport.rs        # HTTP server/client
 ├── queue.rs            # SQLite retry queue
 ├── messaging.rs        # High-level API
-├── storage/            # Persistent data (modular)
+├── storage/            # SQLite-based persistent storage
 │   ├── mod.rs          # Public API, re-exports
 │   ├── contact.rs      # Contact struct, signed token generation/verification
 │   ├── message.rs      # Message struct, delivery status tracking
 │   ├── chat.rs         # Chat conversation management
 │   ├── settings.rs     # Settings struct
-│   ├── settings_manager.rs # Thread-safe SettingsManager (Arc<RwLock>)
-│   ├── app_state.rs    # AppState persistence (JSON) - single file database
-│   └── storage_db.rs   # Low-level SQLite storage (unimplemented)
+│   ├── settings_manager.rs # Thread-safe SettingsManager (legacy, unused in TUI)
+│   ├── app_state.rs    # AppState with SQLite persistence methods
+│   └── storage_db.rs   # SQLite storage backend (schema + CRUD)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
 │   ├── types.rs        # Common types (PortMappingResult, MappingError, etc.)
@@ -86,7 +86,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (373 tests)
+├── tests/              # Unit tests (381 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -95,7 +95,7 @@ src/
 │   ├── messaging_tests.rs
 │   ├── connectivity_tests.rs  # Includes CGNAT detection
 │   ├── lib_tests.rs
-│   ├── storage_tests/  # Storage module tests (56 tests)
+│   ├── storage_tests/  # Storage module tests (66 tests)
 │   │   ├── mod.rs
 │   │   ├── contact_tests.rs
 │   │   ├── token_tests.rs
@@ -134,7 +134,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (373 total)
+cargo test                     # All tests (381 total)
 
 # Quality
 cargo fmt                      # Format
@@ -183,11 +183,11 @@ src/tests/
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
 ├── lib_tests.rs          (1 test)    - Library init
-├── storage_tests/        (56 tests)  - Organized by storage module
+├── storage_tests/        (66 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
 │   ├── token_tests.rs    (16 tests)  - Token generation/parsing, signature verification
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
-│   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
+│   ├── app_state_tests.rs (21 tests) - AppState JSON/CBOR + SQLite (save/load, messages, updates, migration)
 │   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
 └── tui_tests/            (122 tests) - Organized by TUI components
     ├── app_tests.rs      (35 tests)  - App business logic, self-import prevention
@@ -284,15 +284,18 @@ sudo apt-get install pkg-config libssl-dev
 
 **Must maintain:**
 - Direct P2P only (no servers/relays)
-- Local-only storage (single `app_state.json` file in project root)
+- Local-only storage (SQLite databases in `./app_data/`)
 - Transparency about limitations
 
-**Note on app_state.json:**
-- Created automatically on first run with default settings
-- Stores all application data (contacts, chats, messages, settings)
-- Auto-saved after every state change
-- Tests use isolated temp directories to avoid polluting production data
-- Safe to delete for full reset (will recreate with defaults)
+**Storage Architecture:**
+- **Production**: `./app_data/pure2p.db` (all app data) + `./app_data/message_queue.db` (retry queue)
+- **Tests**: In-memory SQLite databases (no filesystem pollution)
+- **Migration**: Legacy `app_state.json` auto-migrated to SQLite on first run (backed up as `.json.bak`)
+- **Data**: User identity (keypair, UID), contacts, chats, messages, settings
+- **Auto-save**: State saved to SQLite after every modification
+- **Concurrent access**: Transport handlers create separate connections to same database file
+- **State reload**: App reloads from DB when navigating to pick up incoming messages
+- Safe to delete `./app_data/` for full reset (will recreate with defaults)
 
 See [ROADMAP.md](ROADMAP.md#-contributing) for details.
 

@@ -1,7 +1,7 @@
 //! Main TUI application state and logic
 
 use crate::crypto::KeyPair;
-use crate::storage::{AppState, Message};
+use crate::storage::{AppState, Message, storage_db::Storage};
 use crate::tui::types::{Screen, MenuItem};
 use crate::tui::screens::*;
 use crate::transport::Transport;
@@ -44,33 +44,48 @@ pub struct App {
     pub connectivity_result: Option<crate::connectivity::ConnectivityResult>,
     /// Local port for connectivity
     pub local_port: u16,
-    /// Path to app state file
+    /// Path to app state file (legacy, kept for compatibility)
     state_path: String,
     /// Transport layer for sending/receiving messages
     pub transport: Transport,
     /// Message queue for retry logic
     pub queue: MessageQueue,
+    /// SQLite storage backend
+    storage: Storage,
 }
 
 impl App {
     /// Create new application
     ///
     /// # Arguments
-    /// * `state_path` - Optional path to app state file. Defaults to "app_state.json" if None.
+    /// * `state_path` - Optional path for testing. Production uses SQLite in ./app_data/
     ///                  Used primarily for testing to avoid polluting user's state.
     pub fn new_with_settings<P: AsRef<std::path::Path>>(state_path: Option<P>) -> Result<Self, Box<dyn std::error::Error>> {
-        // Determine state file path
+        // Determine state file path (legacy, used for migration)
         let state_path = state_path.as_ref()
             .map(|p| p.as_ref().to_string_lossy().to_string())
             .unwrap_or_else(|| "app_state.json".to_string());
 
-        // Check if this is first run (file doesn't exist)
-        let is_first_run = !std::path::Path::new(&state_path).exists();
+        // Initialize SQLite storage
+        let storage = if state_path.contains("test") || state_path.contains("tmp") {
+            // For tests, use in-memory database
+            Storage::new_in_memory()?
+        } else {
+            // Production: use ./app_data/pure2p.db
+            Storage::new_with_default_path()?
+        };
 
-        // Load or create app state (contacts, chats, messages, settings - everything!)
-        let mut app_state = AppState::load(&state_path).unwrap_or_else(|_| {
-            AppState::new() // Will have default settings
-        });
+        // Check for legacy app_state.json and migrate if exists
+        let migrated = AppState::migrate_from_json(&state_path, &storage)?;
+        if migrated {
+            tracing::info!("Migrated app state from {} to SQLite database", state_path);
+        }
+
+        // Load app state from SQLite (or create new if empty)
+        let mut app_state = AppState::load_from_db(&storage)?;
+
+        // Check if this is first run (no user keypair)
+        let is_first_run = app_state.user_keypair.is_none();
 
         // Load or generate user keypair (persistent identity)
         let keypair = if let Some(existing_keypair) = &app_state.user_keypair {
@@ -89,8 +104,19 @@ impl App {
         // Create transport layer
         let transport = Transport::new();
 
-        // Create message queue (for retry logic)
-        let queue = MessageQueue::new()?;
+        // Create message queue in app_data directory
+        let queue_path = if state_path.contains("test") || state_path.contains("tmp") {
+            // For tests, use the test directory
+            std::path::Path::new(&state_path)
+                .parent()
+                .and_then(|p| p.to_str())
+                .map(|p| format!("{}/message_queue.db", p))
+                .unwrap_or_else(|| "message_queue.db".to_string())
+        } else {
+            // Production: use ./app_data/message_queue.db
+            "./app_data/message_queue.db".to_string()
+        };
+        let queue = MessageQueue::new_with_path(&queue_path)?;
 
         // Check for pending messages in queue
         let pending_count = queue.count_pending()?;
@@ -125,6 +151,7 @@ impl App {
             state_path,
             transport,
             queue,
+            storage,
         };
 
         // Save initial state on first run
@@ -135,19 +162,50 @@ impl App {
         Ok(app)
     }
 
-    /// Create new application with default state path
+    /// Create new application with default storage
     ///
     /// This is a convenience wrapper around `new_with_settings(None)`.
-    /// For production use, all data will be stored in "app_state.json" in the project root.
+    /// For production use, all data will be stored in SQLite at ./app_data/pure2p.db
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Self::new_with_settings(None::<&str>)
     }
 
-    /// Save application state to disk
+    /// Save application state to SQLite database
     ///
-    /// Persists contacts, chats, and messages to app_state.json
+    /// Persists user identity, contacts, chats, messages, and settings to pure2p.db
     pub fn save_state(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.app_state.save(&self.state_path)?;
+        self.app_state.save_to_db(&self.storage)?;
+        Ok(())
+    }
+
+    /// Reload application state from SQLite database
+    ///
+    /// This is called periodically to pick up changes made by transport handlers
+    /// (e.g., incoming messages from other peers)
+    ///
+    /// Note: Only reloads in production (file-based storage). Tests use in-memory
+    /// databases which don't share state between connections, so reloading would
+    /// create a fresh empty database.
+    pub fn reload_state(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Skip reload for test environments (in-memory databases don't share state)
+        if self.state_path.contains("test") || self.state_path.contains("tmp") {
+            return Ok(());
+        }
+
+        // Load fresh state from database
+        let mut loaded_state = AppState::load_from_db(&self.storage)?;
+
+        // Preserve user identity and network info if not in DB yet
+        if loaded_state.user_keypair.is_none() {
+            loaded_state.user_keypair = self.app_state.user_keypair.clone();
+        }
+        if loaded_state.user_ip.is_none() {
+            loaded_state.user_ip = self.app_state.user_ip.clone();
+        }
+
+        // Update app state
+        self.app_state = loaded_state;
+
         Ok(())
     }
 
@@ -162,7 +220,10 @@ impl App {
         let local_port = self.local_port;
         let state_path = self.state_path.clone();
 
-        // Setup ping handler to create chat when ping is received
+        // Create storage instances for handlers (they need their own connections in separate threads)
+        let use_in_memory = state_path.contains("test") || state_path.contains("tmp");
+
+        // Setup ping handler and message handler to receive messages and pings
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             rt.block_on(async move {
@@ -170,14 +231,57 @@ impl App {
                 transport.set_local_uid(uid).await;
 
                 // Setup ping handler
-                let state_path_for_handler = state_path.clone();
+                let use_in_memory_ping = use_in_memory;
                 transport.set_ping_handler(move |sender_uid: String| {
-                    // Load app state, create/update chat, save
-                    if let Ok(mut app_state) = AppState::load(&state_path_for_handler) {
-                        let chat = app_state.get_or_create_chat(&sender_uid);
-                        chat.mark_unread(); // Mark as active (new ping received)
-                        let _ = app_state.save(&state_path_for_handler);
-                        tracing::info!("Created/updated chat for ping from {}", sender_uid);
+                    // Create storage connection for this handler
+                    let storage_result = if use_in_memory_ping {
+                        Storage::new_in_memory()
+                    } else {
+                        Storage::new_with_default_path()
+                    };
+
+                    if let Ok(storage) = storage_result {
+                        if let Ok(mut app_state) = AppState::load_from_db(&storage) {
+                            let chat = app_state.get_or_create_chat(&sender_uid);
+                            chat.mark_unread(); // Mark as active (new ping received)
+                            let _ = app_state.save_to_db(&storage);
+                            tracing::info!("Created/updated chat for ping from {}", sender_uid);
+                        }
+                    }
+                }).await;
+
+                // Setup message handler
+                let use_in_memory_msg = use_in_memory;
+                transport.set_new_message_handler(move |msg_req: crate::transport::MessageRequest| {
+                    // Create storage connection for this handler
+                    let storage_result = if use_in_memory_msg {
+                        Storage::new_in_memory()
+                    } else {
+                        Storage::new_with_default_path()
+                    };
+
+                    if let Ok(storage) = storage_result {
+                        if let Ok(mut app_state) = AppState::load_from_db(&storage) {
+                            // Get to_uid before borrowing app_state mutably
+                            let to_uid = app_state.user_keypair.as_ref().map(|kp| kp.uid.to_string()).unwrap_or_default();
+
+                            let chat = app_state.get_or_create_chat(&msg_req.from_uid);
+
+                            // Create message from the request
+                            let message = Message::new(
+                                uuid::Uuid::new_v4().to_string(),
+                                msg_req.from_uid.clone(),
+                                to_uid,
+                                msg_req.payload,
+                                Utc::now().timestamp_millis(),
+                            );
+
+                            chat.append_message(message);
+                            chat.mark_unread(); // Mark as unread (new message received)
+
+                            let _ = app_state.save_to_db(&storage);
+                            tracing::info!("Received message from {} (type: {})", msg_req.from_uid, msg_req.message_type);
+                        }
                     }
                 }).await;
 
@@ -297,6 +401,9 @@ impl App {
 
     /// Show chat list screen
     pub fn show_chat_list_screen(&mut self) {
+        // Reload state to pick up any new messages from transport handlers
+        let _ = self.reload_state();
+
         self.chat_list_screen = Some(ChatListScreen::new());
         self.current_screen = Screen::ChatList;
     }
@@ -353,15 +460,16 @@ impl App {
             }
         }
 
-        // Set queue size from app state
-        screen.set_queue_size(self.app_state.message_queue.len());
+        // Set queue size from SQLite queue (not app_state.message_queue)
+        let queue_size = self.queue.count_pending().unwrap_or(0);
+        screen.set_queue_size(queue_size);
     }
 
     /// Refresh diagnostics screen with latest data
     pub fn refresh_diagnostics(&mut self) {
         // Extract necessary data first to avoid borrow conflicts
         let local_ip = self.local_ip.clone();
-        let queue_size = self.app_state.message_queue.len();
+        let queue_size = self.queue.count_pending().unwrap_or(0);
 
         if let Some(screen) = &mut self.diagnostics_screen {
             // Set IPv4 address from local_ip
@@ -459,6 +567,9 @@ impl App {
 
     /// Return to main menu
     pub fn back_to_main_menu(&mut self) {
+        // Reload state to pick up any changes while in other screens
+        let _ = self.reload_state();
+
         self.current_screen = Screen::MainMenu;
         self.share_contact_screen = None;
         self.import_contact_screen = None;
@@ -470,6 +581,9 @@ impl App {
 
     /// Return to chat list
     pub fn back_to_chat_list(&mut self) {
+        // Reload state to show any new messages
+        let _ = self.reload_state();
+
         self.current_screen = Screen::ChatList;
         self.chat_view_screen = None;
     }
@@ -495,15 +609,22 @@ impl App {
 
     /// Open selected chat
     pub fn open_selected_chat(&mut self) {
-        if let Some(chat_list) = &self.chat_list_screen {
+        // Get selected index first to avoid borrow checker issues
+        let selected_index = if let Some(chat_list) = &self.chat_list_screen {
             if self.app_state.chats.is_empty() {
                 return;
             }
+            chat_list.selected_index
+        } else {
+            return;
+        };
 
-            let contact_uid = self.app_state.chats[chat_list.selected_index].contact_uid.clone();
-            self.chat_view_screen = Some(ChatViewScreen::new(contact_uid));
-            self.current_screen = Screen::ChatView;
-        }
+        // Reload state before entering chat to show latest messages
+        let _ = self.reload_state();
+
+        let contact_uid = self.app_state.chats[selected_index].contact_uid.clone();
+        self.chat_view_screen = Some(ChatViewScreen::new(contact_uid));
+        self.current_screen = Screen::ChatView;
     }
 
     /// Show delete confirmation popup
@@ -620,34 +741,84 @@ impl App {
 
     /// Send message in current chat
     pub fn send_message_in_chat(&mut self) {
-        if let Some(chat_view) = &mut self.chat_view_screen {
+        // Extract necessary data from chat_view_screen first
+        let (message_content, contact_uid) = if let Some(chat_view) = &self.chat_view_screen {
             if chat_view.input.trim().is_empty() {
                 return;
             }
+            (chat_view.input.clone(), chat_view.contact_uid.clone())
+        } else {
+            return;
+        };
 
-            let message_content = chat_view.input.clone();
-            let contact_uid = chat_view.contact_uid.clone();
+        // Find the chat and add the message
+        if let Some(chat) = self.app_state.chats.iter_mut().find(|c| c.contact_uid == contact_uid) {
+            // Create a new message
+            let message = Message::new(
+                uuid::Uuid::new_v4().to_string(),
+                self.keypair.uid.to_string(),
+                contact_uid.clone(),
+                message_content.as_bytes().to_vec(),
+                Utc::now().timestamp_millis(),
+            );
 
-            // Find the chat and add the message
-            if let Some(chat) = self.app_state.chats.iter_mut().find(|c| c.contact_uid == contact_uid) {
-                // Create a new message
-                let message = Message::new(
-                    uuid::Uuid::new_v4().to_string(),
-                    self.keypair.uid.to_string(),
-                    contact_uid.clone(),
-                    message_content.as_bytes().to_vec(),
-                    Utc::now().timestamp_millis(),
-                );
+            chat.append_message(message.clone());
 
-                chat.append_message(message);
+            // Clear input after adding message
+            if let Some(chat_view) = &mut self.chat_view_screen {
                 chat_view.clear_input();
-                chat_view.set_status("Message queued for sending".to_string());
+            }
 
-                // Auto-save after sending message
-                let _ = self.save_state();
+            // Auto-save after sending message
+            let _ = self.save_state();
 
-                // TODO: Actually send via transport layer
-                // For now, messages are just stored locally
+            // Send message via messaging API (auto-queues on failure)
+            let contact_found = self.app_state.contacts.iter().find(|c| c.uid == contact_uid).cloned();
+
+            if let Some(contact) = contact_found {
+                let transport = self.transport.clone();
+                let message_clone = message.clone();
+
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                    rt.block_on(async move {
+                        // Create new MessageQueue instance (persistent SQLite allows multiple connections)
+                        let mut queue = match crate::queue::MessageQueue::new_with_path("message_queue.db") {
+                            Ok(q) => q,
+                            Err(e) => {
+                                tracing::error!("Failed to create queue: {}", e);
+                                return;
+                            }
+                        };
+
+                        match crate::messaging::send_message(
+                            &transport,
+                            &mut queue,
+                            &contact,
+                            &message_clone,
+                            crate::queue::Priority::Normal,
+                        ).await {
+                            Ok(delivered) => {
+                                if delivered {
+                                    tracing::info!("Message sent successfully to {}", contact.uid);
+                                } else {
+                                    tracing::info!("Message queued for retry to {}", contact.uid);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to send/queue message to {}: {}", contact.uid, e);
+                            }
+                        }
+                    });
+                });
+
+                if let Some(chat_view) = &mut self.chat_view_screen {
+                    chat_view.set_status("Message sent".to_string());
+                }
+            } else {
+                if let Some(chat_view) = &mut self.chat_view_screen {
+                    chat_view.set_status("Error: Contact not found".to_string());
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 // AppState Tests - Testing AppState struct and its methods
 
-use crate::storage::{AppState, Chat, Contact, Message};
+use crate::storage::{AppState, Chat, Contact, Message, storage_db::Storage};
+use crate::crypto::KeyPair;
 use chrono::{Duration, Utc};
 use tempfile::NamedTempFile;
 use std::collections::HashSet;
@@ -260,4 +261,262 @@ fn test_appstate_get_chat_mut() {
     let chat = state.get_chat("alice").unwrap();
     assert!(chat.has_pending_messages);
     assert!(chat.is_active);
+}
+
+// ========== SQLite Storage Tests ==========
+
+#[test]
+fn test_app_state_save_load_sqlite() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Create state with some data
+    let mut state = AppState::new();
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    state.user_keypair = Some(keypair.clone());
+    state.user_ip = Some("203.0.113.42:8080".to_string());
+    state.user_port = 8080;
+
+    state.contacts.push(Contact::new(
+        "test_uid".to_string(),
+        "127.0.0.1:8080".to_string(),
+        vec![1, 2, 3, 4],
+        vec![99u8; 32],
+        Utc::now() + Duration::days(30),
+    ));
+    state.chats.push(Chat::new("test_uid".to_string()));
+    state.settings.enable_notifications = false;
+
+    // Save to SQLite
+    state.save_to_db(&storage).expect("Failed to save to database");
+
+    // Load from SQLite
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load from database");
+
+    // Verify user identity
+    assert!(loaded.user_keypair.is_some());
+    assert_eq!(loaded.user_keypair.unwrap().uid, keypair.uid);
+    assert_eq!(loaded.user_ip, Some("203.0.113.42:8080".to_string()));
+    assert_eq!(loaded.user_port, 8080);
+
+    // Verify contacts
+    assert_eq!(loaded.contacts.len(), 1);
+    assert_eq!(loaded.contacts[0].uid, "test_uid");
+
+    // Verify chats
+    assert_eq!(loaded.chats.len(), 1);
+    assert_eq!(loaded.chats[0].contact_uid, "test_uid");
+
+    // Verify settings
+    assert!(!loaded.settings.enable_notifications);
+}
+
+#[test]
+fn test_app_state_sqlite_with_messages() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Create state with chat containing messages
+    let mut state = AppState::new();
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    state.user_keypair = Some(keypair);
+
+    // Add contact first (required by foreign key constraint)
+    state.contacts.push(Contact::new(
+        "alice".to_string(),
+        "10.0.0.1:8080".to_string(),
+        vec![1; 32],
+        vec![2; 32],
+        Utc::now() + Duration::days(30),
+    ));
+
+    let mut chat = Chat::new("alice".to_string());
+    for i in 0..3 {
+        let msg = Message::new(
+            format!("msg_{}", i),
+            "alice".to_string(),
+            "self".to_string(),
+            vec![i as u8; 10],
+            1000 * i as i64,
+        );
+        chat.append_message(msg);
+    }
+    chat.mark_unread();
+    state.chats.push(chat);
+
+    // Save and load
+    state.save_to_db(&storage).expect("Failed to save");
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+
+    // Verify messages
+    assert_eq!(loaded.chats.len(), 1);
+    assert_eq!(loaded.chats[0].messages.len(), 3);
+    assert_eq!(loaded.chats[0].messages[0].id, "msg_0");
+    assert_eq!(loaded.chats[0].messages[2].id, "msg_2");
+    assert!(loaded.chats[0].is_active);
+}
+
+#[test]
+fn test_app_state_sqlite_multiple_contacts_and_chats() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Create state with multiple contacts and chats
+    let mut state = AppState::new();
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    state.user_keypair = Some(keypair);
+
+    for i in 0..5 {
+        let uid = format!("uid_{}", i);
+        state.contacts.push(Contact::new(
+            uid.clone(),
+            format!("10.0.0.{}:8080", i),
+            vec![i as u8; 32],
+            vec![99u8; 32],
+            Utc::now() + Duration::days(30),
+        ));
+
+        let mut chat = Chat::new(uid.clone());
+        chat.mark_unread();
+        state.chats.push(chat);
+    }
+
+    // Save and load
+    state.save_to_db(&storage).expect("Failed to save");
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+
+    // Verify
+    assert_eq!(loaded.contacts.len(), 5);
+    assert_eq!(loaded.chats.len(), 5);
+    assert_eq!(loaded.contacts[4].uid, "uid_4");
+    assert_eq!(loaded.chats[2].contact_uid, "uid_2");
+}
+
+#[test]
+fn test_app_state_sqlite_update_existing_data() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Create and save initial state
+    let mut state = AppState::new();
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    state.user_keypair = Some(keypair);
+    state.user_ip = Some("192.168.1.100:8080".to_string());
+
+    state.contacts.push(Contact::new(
+        "alice".to_string(),
+        "10.0.0.1:8080".to_string(),
+        vec![1; 32],
+        vec![2; 32],
+        Utc::now() + Duration::days(30),
+    ));
+
+    state.save_to_db(&storage).expect("Failed to save");
+
+    // Modify and save again
+    state.user_ip = Some("203.0.113.50:9000".to_string());
+    state.contacts[0].ip = "10.0.0.2:9000".to_string();
+    state.contacts.push(Contact::new(
+        "bob".to_string(),
+        "10.0.0.3:8080".to_string(),
+        vec![3; 32],
+        vec![4; 32],
+        Utc::now() + Duration::days(30),
+    ));
+
+    state.save_to_db(&storage).expect("Failed to update");
+
+    // Load and verify updates
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+
+    assert_eq!(loaded.user_ip, Some("203.0.113.50:9000".to_string()));
+    assert_eq!(loaded.contacts.len(), 2);
+    assert_eq!(loaded.contacts[0].ip, "10.0.0.2:9000");
+    assert_eq!(loaded.contacts[1].uid, "bob");
+}
+
+#[test]
+fn test_app_state_migrate_from_json() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+    let json_path = temp_file.path();
+
+    // Create JSON state file
+    let mut state = AppState::new();
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    state.user_keypair = Some(keypair.clone());
+    state.user_ip = Some("192.168.1.100:8080".to_string());
+    state.user_port = 8080;
+
+    state.contacts.push(Contact::new(
+        "migrated_contact".to_string(),
+        "10.0.0.1:8080".to_string(),
+        vec![1; 32],
+        vec![2; 32],
+        Utc::now() + Duration::days(30),
+    ));
+
+    state.save(json_path).expect("Failed to save JSON");
+
+    // Migrate from JSON to SQLite
+    let migrated = AppState::migrate_from_json(json_path, &storage)
+        .expect("Failed to migrate");
+
+    assert!(migrated, "Should indicate migration was performed");
+
+    // Verify data in SQLite
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+
+    assert!(loaded.user_keypair.is_some());
+    assert_eq!(loaded.user_keypair.unwrap().uid, keypair.uid);
+    assert_eq!(loaded.contacts.len(), 1);
+    assert_eq!(loaded.contacts[0].uid, "migrated_contact");
+}
+
+#[test]
+fn test_app_state_migrate_nonexistent_json() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Try to migrate from non-existent file
+    let migrated = AppState::migrate_from_json("/tmp/nonexistent_pure2p.json", &storage)
+        .expect("Migration should succeed even if file doesn't exist");
+
+    assert!(!migrated, "Should indicate no migration was performed");
+
+    // Database should be empty
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+    assert!(loaded.user_keypair.is_none());
+    assert!(loaded.contacts.is_empty());
+}
+
+#[test]
+fn test_app_state_sqlite_load_empty_database() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Load from empty database
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+
+    // Should return new empty state
+    assert!(loaded.user_keypair.is_none());
+    assert!(loaded.contacts.is_empty());
+    assert!(loaded.chats.is_empty());
+    assert_eq!(loaded.settings.default_contact_expiry_days, 30);
+}
+
+#[test]
+fn test_app_state_sqlite_settings_persistence() {
+    let storage = Storage::new_in_memory().expect("Failed to create storage");
+
+    // Create state with custom settings
+    let mut state = AppState::new();
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    state.user_keypair = Some(keypair);
+    state.settings.retry_interval_minutes = 25;
+    state.settings.max_message_retries = 15;
+    state.settings.enable_notifications = false;
+
+    // Save and load
+    state.save_to_db(&storage).expect("Failed to save");
+    let loaded = AppState::load_from_db(&storage).expect("Failed to load");
+
+    // Verify settings
+    assert_eq!(loaded.settings.retry_interval_minutes, 25);
+    assert_eq!(loaded.settings.max_message_retries, 15);
+    assert!(!loaded.settings.enable_notifications);
 }

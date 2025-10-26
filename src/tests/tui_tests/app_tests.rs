@@ -22,10 +22,17 @@ fn create_test_app_with_settings(settings: Settings) -> (App, TempDir) {
     // Create app state with custom settings
     let mut app_state = AppState::new();
     app_state.settings = settings;
-    app_state.save(&state_path).expect("Failed to save app state");
 
-    let app = App::new_with_settings(Some(&state_path))
+    // Since we're using in-memory storage for tests, we need to:
+    // 1. Create the app first (which creates in-memory storage)
+    // 2. Then update its settings and save
+    let mut app = App::new_with_settings(Some(&state_path))
         .expect("Failed to create app");
+
+    // Update the app's settings
+    app.app_state.settings = app_state.settings;
+    app.save_state().expect("Failed to save app state");
+
     (app, temp_dir)
 }
 
@@ -981,19 +988,21 @@ fn test_app_falls_back_to_defaults_on_corrupt_state() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let state_path = temp_dir.path().join("app_state.json");
 
-    // Create a corrupted state file
+    // Note: With SQLite storage, corrupt JSON files are ignored (migration is optional)
+    // This test now verifies that creating a fresh app gives defaults
+    // Create a corrupted JSON file (it will be ignored during migration)
     std::fs::write(&state_path, "{ invalid json }")
         .expect("Failed to write corrupt state");
 
-    // Create app (should fall back to defaults)
+    // Create app (uses in-memory SQLite for tests, ignores corrupt JSON)
     let app = App::new_with_settings(Some(&state_path))
         .expect("Failed to create app");
 
-    // Verify default state is used
+    // Verify default state is used (fresh database)
     assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
-        "Should fall back to default retry interval");
+        "Should use default retry interval");
     assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
-        "Should fall back to default contact expiry");
+        "Should use default contact expiry");
     assert!(app.app_state.contacts.is_empty(), "Should have no contacts");
     assert!(app.app_state.chats.is_empty(), "Should have no chats");
 }

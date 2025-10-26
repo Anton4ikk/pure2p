@@ -5,8 +5,10 @@ use chrono::{Duration, Utc};
 
 #[test]
 fn test_storage_creation() {
-    let storage = Storage::new();
-    assert!(storage._conn.is_none());
+    let storage = Storage::new_in_memory().expect("Failed to create in-memory storage");
+    // Verify we can perform basic operations
+    let settings = storage.load_settings().expect("Failed to load settings");
+    assert!(settings.is_none()); // Should be empty on fresh storage
 }
 
 #[test]

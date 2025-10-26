@@ -35,14 +35,14 @@ cargo fmt
 
 **`transport`** - HTTP/1.1 server with `/output`, `/ping`, `/message` endpoints. Peer management, delivery tracking.
 
-**`storage`** - Modular storage system for persistent data:
+**`storage`** - SQLite-based storage system for persistent data:
 - `contact.rs` - Contact struct and signed token generation/verification (base64 CBOR + Ed25519 signature)
 - `message.rs` - Message struct and delivery status tracking
 - `chat.rs` - Chat conversation management
 - `settings.rs` - Application settings struct
-- `settings_manager.rs` - Thread-safe settings access for UI
-- `app_state.rs` - AppState persistence (JSON/CBOR) - single file database for all data (contacts, chats, messages, settings)
-- `storage_db.rs` - Low-level SQLite storage (unimplemented)
+- `settings_manager.rs` - Thread-safe SettingsManager (legacy, unused in TUI)
+- `app_state.rs` - AppState with SQLite persistence methods (`save_to_db`, `load_from_db`, `migrate_from_json`)
+- `storage_db.rs` - SQLite storage backend (user identity, contacts, chats, messages, settings)
 - `mod.rs` - Public API with re-exports
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
@@ -72,26 +72,28 @@ cargo fmt
 
 **Chat** - `contact_uid`, `messages[]`, `is_active`, `has_pending_messages`. Methods: `append_message()`, `mark_unread()`, `mark_has_pending()`
 
-**AppState** - `user_keypair`, `user_ip`, `user_port`, `contacts[]`, `chats[]`, `message_queue[]`, `settings`. Methods: `get_chat()`, `sync_pending_status()`, `save()`/`load()`. **Single source of truth**: All app data persisted in `app_state.json`, loaded on startup, auto-saved on all state changes (import contact, send message, delete chat, change settings, connectivity detected).
+**AppState** - `user_keypair`, `user_ip`, `user_port`, `contacts[]`, `chats[]`, `message_queue[]`, `settings`. Methods: `get_chat()`, `sync_pending_status()`, `save_to_db()`/`load_from_db()`, `migrate_from_json()`. **Single source of truth**: All app data persisted in SQLite database (`./app_data/pure2p.db`), loaded on startup, auto-saved on all state changes (import contact, send message, delete chat, change settings, connectivity detected).
 
-**User Identity** - Ed25519 + X25519 keypair generated once on first run, stored in `app_state.json`. UID remains constant across restarts. Contacts can reliably message you back.
+**User Identity** - Ed25519 + X25519 keypair generated once on first run, stored in SQLite. UID remains constant across restarts. Contacts can reliably message you back.
 
-**Settings** - Retry intervals, storage path, contact expiry, max retries. Stored within AppState.
+**Settings** - Retry intervals, storage path, contact expiry, max retries. Stored in SQLite as part of AppState.
 
-**App (TUI)** - Main application state with automatic connectivity, transport, and persistence:
-- `app_state` - Loaded from `app_state.json` on startup, saved on exit and after changes
-- `state_path` - Path to state file (default: `app_state.json`, tests use temp dirs)
+**App (TUI)** - Main application state with automatic connectivity, transport, and SQLite persistence:
+- `app_state` - Loaded from SQLite (`./app_data/pure2p.db`) on startup, saved on exit and after changes
+- `storage` - SQLite storage instance (file-based for production, in-memory for tests)
+- `state_path` - Legacy path for JSON migration (auto-migrates `app_state.json` to SQLite on first run)
 - `transport` - HTTP transport layer for sending/receiving messages and pings
-- `queue` - SQLite-backed message queue for retry logic
+- `queue` - SQLite-backed message queue in `./app_data/message_queue.db`
 - `connectivity_result` - Stores startup/latest connectivity test results
 - `local_ip` - Automatically updated from connectivity results (external IP:port)
-- `local_port` - Port for listening and connectivity tests (default: 8080)
+- `local_port` - Port for listening and connectivity tests (random 49152-65535)
 - `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
-- Startup: Loads all data from `app_state.json`, starts transport server, runs `establish_connectivity()` in background
-- Transport: Runs HTTP server in background thread, handles incoming pings (auto-creates chats), messages
+- Startup: Migrates legacy JSON if exists, loads all data from SQLite, starts transport server, runs `establish_connectivity()` in background
+- Transport: Runs HTTP server in background thread, handlers create new SQLite connections to persist incoming pings/messages
+- State Reload: Automatically reloads from SQLite when navigating (chat list, chat view, main menu) to pick up transport handler changes
 - ShareContact: Uses detected external IP for accurate contact tokens
 - ImportContact: Automatically sends ping to imported contact to notify them
-- Persistence: Auto-saves state after import/send/delete/settings operations, ping handler auto-saves when creating chats
+- Persistence: Auto-saves to SQLite after import/send/delete/settings operations, transport handlers independently persist changes
 
 ## TUI Architecture
 
@@ -180,10 +182,19 @@ cargo fmt
 - `message.rs` - Message struct with delivery status (Sent, Delivered, Pending, Failed)
 - `chat.rs` - Chat conversation management
 - `settings.rs` - Settings struct
-- `settings_manager.rs` - Thread-safe SettingsManager (Arc<RwLock<Settings>>)
-- `app_state.rs` - AppState struct with save/load (JSON/CBOR) - **single file database**
-- `storage_db.rs` - Low-level SQLite Storage (unimplemented)
+- `settings_manager.rs` - Thread-safe SettingsManager (legacy, unused in TUI)
+- `app_state.rs` - AppState with SQLite persistence (`save_to_db`, `load_from_db`, `migrate_from_json`)
+- `storage_db.rs` - SQLite storage backend with schema and CRUD operations
 - `mod.rs` - Public API with re-exports
+
+**SQLite Schema**:
+- `user_identity` - Single row: Ed25519/X25519 keypairs, UID, IP, port
+- `contacts` - Contact list: UID (PK), IP, pubkeys, expiry, is_active
+- `chats` - Conversations: contact_uid (PK, FK), is_active, has_pending_messages
+- `messages` - All messages: ID (PK), sender, receiver, content, timestamp, chat_uid (FK)
+- `settings` - Single row: All application settings
+- Foreign keys with CASCADE delete (chats → contacts, messages → chats)
+- Indexes on messages (chat_uid, timestamp) for performance
 
 **Contact Tokens**:
 - Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
@@ -192,25 +203,24 @@ cargo fmt
 - Default expiry: 24 hours (1 day)
 - Self-import validation: Rejects tokens with your own UID
 
-**Persistence (app_state.json)**:
-- **Single file database**: All data (user identity, network info, contacts, chats, messages, settings) in one JSON file
-- **User Identity**: Keypair generated on first run, persisted forever. UID never changes.
+**Persistence (SQLite)**:
+- **Production**: `./app_data/pure2p.db` (file-based SQLite)
+- **Message Queue**: `./app_data/message_queue.db` (separate SQLite DB)
+- **Tests**: In-memory SQLite databases (no filesystem pollution)
+- **User Identity**: Keypair generated on first run, persisted in SQLite. UID never changes.
 - **Network Info**: Detected external IP/port saved after connectivity diagnostics
-- **Created on first run**: File created immediately with:
-  - Generated keypair (your permanent identity)
-  - Default settings
-  - Empty contacts/chats lists
-- **Auto-save**: State saved automatically after any data modification:
-  - Import contact → save
-  - Send message → save
-  - Delete chat → save
-  - Change settings → save
-  - Connectivity detected → save (IP/port)
-  - App exit → save
-- **Auto-load**: Full state loaded on app startup (keypair, IP, contacts, chats, etc.)
-- **Test isolation**: Tests use temp directories to avoid polluting user data
-- AppState: JSON/CBOR serialization, sync_pending_status() updates chat flags
-- **Location**: Project root (`./app_state.json`) for production, temp dirs for tests
+- **Auto-save**: State saved to SQLite after any modification:
+  - Import contact → save to DB
+  - Send message → save to DB
+  - Delete chat → save to DB
+  - Change settings → save to DB
+  - Connectivity detected → save to DB (IP/port)
+  - Transport handlers → independently save incoming pings/messages
+- **Auto-load**: Full state loaded from SQLite on app startup
+- **State Reload**: App reloads from DB when navigating to pick up transport handler changes
+- **Migration**: Legacy `app_state.json` auto-migrated to SQLite on first run (backed up as `.json.bak`)
+- **Concurrent Access**: Multiple SQLite connections (main app + transport handlers) share data safely
+- AppState: In-memory representation, persisted to SQLite via `save_to_db()`
 
 ### Messaging
 - `send_message()` → auto-queue on fail
@@ -258,10 +268,11 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (373 total tests)
+- All tests in `src/tests/` directory (381 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
+- Tests use in-memory SQLite to avoid filesystem pollution
 
 **Test Organization:**
 - `crypto_tests.rs` (27 tests) - Keypair generation, signing, UID derivation, X25519 shared secret, AEAD encryption (roundtrip, tampering), token signing (valid, invalid, corrupted)
@@ -272,11 +283,11 @@ cargo fmt
 - `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
-**`storage_tests/` (56 tests):**
+**`storage_tests/` (66 tests):**
 - `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
 - `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
 - `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
-- `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
+- `app_state_tests.rs` (21 tests) - AppState (JSON/CBOR legacy methods + 10 new SQLite tests: save/load, messages, updates, migration, settings)
 - `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
 **`tui_tests/` (122 tests):**
