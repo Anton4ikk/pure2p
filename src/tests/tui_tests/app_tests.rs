@@ -300,7 +300,7 @@ fn test_app_import_valid_contact() {
     let screen = app.import_contact_screen.as_ref().unwrap();
     assert!(!screen.is_error, "Should not be in error state");
     assert!(
-        screen.status_message.as_ref().unwrap().contains("imported and chat created"),
+        screen.status_message.as_ref().unwrap().contains("imported, ping sent"),
         "Should show success message"
     );
 
@@ -311,9 +311,14 @@ fn test_app_import_valid_contact() {
     );
 
     // Verify a chat was created for the imported contact
+    let created_chat = app.app_state.chats.iter().find(|c| c.contact_uid == contact.uid);
+    assert!(created_chat.is_some(), "Chat should be created for imported contact");
+
+    // Verify the chat is marked as having pending messages (⌛ Pending status)
+    let chat = created_chat.unwrap();
     assert!(
-        app.app_state.chats.iter().any(|c| c.contact_uid == contact.uid),
-        "Chat should be created for imported contact"
+        chat.has_pending_messages,
+        "Newly created chat should have pending messages flag set"
     );
 }
 

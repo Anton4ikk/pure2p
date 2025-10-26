@@ -4,6 +4,8 @@ use crate::crypto::KeyPair;
 use crate::storage::{AppState, Message};
 use crate::tui::types::{Screen, MenuItem};
 use crate::tui::screens::*;
+use crate::transport::Transport;
+use crate::queue::MessageQueue;
 use chrono::Utc;
 
 /// Application state
@@ -44,6 +46,10 @@ pub struct App {
     pub local_port: u16,
     /// Path to app state file
     state_path: String,
+    /// Transport layer for sending/receiving messages
+    pub transport: Transport,
+    /// Message queue for retry logic
+    pub queue: MessageQueue,
 }
 
 impl App {
@@ -80,9 +86,14 @@ impl App {
         let local_ip = app_state.user_ip.clone().unwrap_or_else(Self::get_local_ip);
         let local_port = app_state.user_port;
 
-        // Simulate checking for pending messages
-        // In a real implementation, this would query the MessageQueue
-        let pending_count = 0; // TODO: Query actual queue
+        // Create transport layer
+        let transport = Transport::new();
+
+        // Create message queue (for retry logic)
+        let queue = MessageQueue::new()?;
+
+        // Check for pending messages in queue
+        let pending_count = queue.count_pending()?;
 
         // Determine initial screen based on pending messages
         let (current_screen, startup_sync_screen) = if pending_count > 0 {
@@ -112,6 +123,8 @@ impl App {
             connectivity_result: None,
             local_port,
             state_path,
+            transport,
+            queue,
         };
 
         // Save initial state on first run
@@ -135,6 +148,47 @@ impl App {
     /// Persists contacts, chats, and messages to app_state.json
     pub fn save_state(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.app_state.save(&self.state_path)?;
+        Ok(())
+    }
+
+    /// Start transport server in background
+    ///
+    /// This starts the HTTP server to receive messages and pings.
+    /// Handlers are set up to automatically create chats when pings are received.
+    pub fn start_transport(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Set local UID for transport
+        let uid = self.keypair.uid.to_string();
+        let transport = self.transport.clone();
+        let local_port = self.local_port;
+        let state_path = self.state_path.clone();
+
+        // Setup ping handler to create chat when ping is received
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(async move {
+                // Set local UID
+                transport.set_local_uid(uid).await;
+
+                // Setup ping handler
+                let state_path_for_handler = state_path.clone();
+                transport.set_ping_handler(move |sender_uid: String| {
+                    // Load app state, create/update chat, save
+                    if let Ok(mut app_state) = AppState::load(&state_path_for_handler) {
+                        let chat = app_state.get_or_create_chat(&sender_uid);
+                        chat.mark_unread(); // Mark as active (new ping received)
+                        let _ = app_state.save(&state_path_for_handler);
+                        tracing::info!("Created/updated chat for ping from {}", sender_uid);
+                    }
+                }).await;
+
+                // Start server
+                let addr = format!("0.0.0.0:{}", local_port).parse().expect("Invalid address");
+                if let Err(e) = transport.clone().start(addr).await {
+                    tracing::error!("Transport server failed: {}", e);
+                }
+            });
+        });
+
         Ok(())
     }
 
@@ -527,16 +581,32 @@ impl App {
             // Add contact to list
             self.app_state.contacts.push(contact.clone());
 
-            // Create a new empty chat for this contact
-            let new_chat = crate::storage::Chat::new(contact_uid);
+            // Create a new chat for this contact and mark as pending
+            // (waiting for ping response)
+            let mut new_chat = crate::storage::Chat::new(contact_uid);
+            new_chat.mark_has_pending(); // Show ⌛ Pending status until ping response
             self.app_state.chats.push(new_chat);
 
             // Auto-save after importing contact and creating chat
             let _ = self.save_state();
 
+            // Send ping to the contact in background thread
+            let transport = self.transport.clone();
+            let contact_for_ping = contact.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async move {
+                    if let Err(e) = transport.send_ping(&contact_for_ping).await {
+                        tracing::warn!("Failed to ping newly imported contact {}: {}", contact_for_ping.uid, e);
+                    } else {
+                        tracing::info!("Successfully pinged newly imported contact {}", contact_for_ping.uid);
+                    }
+                });
+            });
+
             // Update import screen status
             if let Some(screen) = &mut self.import_contact_screen {
-                screen.status_message = Some(format!("✓ Contact imported and chat created!"));
+                screen.status_message = Some(format!("✓ Contact imported, ping sent!"));
                 screen.is_error = false;
             }
         } else {

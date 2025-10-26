@@ -78,21 +78,25 @@ cargo fmt
 
 **Settings** - Retry intervals, storage path, contact expiry, max retries. Stored within AppState.
 
-**App (TUI)** - Main application state with automatic connectivity and persistence:
+**App (TUI)** - Main application state with automatic connectivity, transport, and persistence:
 - `app_state` - Loaded from `app_state.json` on startup, saved on exit and after changes
 - `state_path` - Path to state file (default: `app_state.json`, tests use temp dirs)
+- `transport` - HTTP transport layer for sending/receiving messages and pings
+- `queue` - SQLite-backed message queue for retry logic
 - `connectivity_result` - Stores startup/latest connectivity test results
 - `local_ip` - Automatically updated from connectivity results (external IP:port)
 - `local_port` - Port for listening and connectivity tests (default: 8080)
 - `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
-- Startup: Loads all data from `app_state.json`, runs `establish_connectivity()` in background
+- Startup: Loads all data from `app_state.json`, starts transport server, runs `establish_connectivity()` in background
+- Transport: Runs HTTP server in background thread, handles incoming pings (auto-creates chats), messages
 - ShareContact: Uses detected external IP for accurate contact tokens
-- Persistence: Auto-saves state after import/send/delete/settings operations
+- ImportContact: Automatically sends ping to imported contact to notify them
+- Persistence: Auto-saves state after import/send/delete/settings operations, ping handler auto-saves when creating chats
 
 ## TUI Architecture
 
-**Binary (`src/bin/tui.rs`)** - Thin wrapper (~320 lines):
-- `main()` - Terminal initialization/cleanup, triggers startup connectivity
+**Binary (`src/bin/tui.rs`)** - Thin wrapper (~340 lines):
+- `main()` - Terminal initialization/cleanup, starts transport server, triggers startup connectivity
 - `run_app()` - Event loop with 100ms polling
 - Polls for startup connectivity completion (updates `local_ip` when ready)
 - Polls for diagnostics refresh completion (when on Diagnostics screen)
@@ -121,7 +125,7 @@ cargo fmt
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time), automatic on startup if messages pending
 2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n), shows yellow warning during connectivity setup, shows red error block if all connectivity attempts fail
 3. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), 24-hour expiry countdown
-4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat for imported contact
+4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat with ⌛ Pending status, sends ping to notify imported contact (background thread)
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 7. **Settings** - Edit retry interval (1-1440 min, 4-digit max input), auto-save with toast
@@ -157,8 +161,11 @@ cargo fmt
 
 ### Transport
 - Hyper HTTP/1.1 server/client
-- Endpoints: `/output` (legacy), `/ping` (connectivity), `/message` (new)
-- Dual handlers: MessageHandler (legacy), NewMessageHandler (AppState)
+- Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new)
+- Handlers: MessageHandler (legacy), NewMessageHandler (AppState), PingHandler (auto-create chats)
+- **PingRequest**: `{from_uid: String}` - sent on contact import to notify peer
+- **PingResponse**: `{uid: String, status: String}` - confirms peer is online
+- **Ping flow**: Import contact → send PingRequest → peer receives → PingHandler creates chat → PingResponse returned
 
 ### Queue
 - Priority: Urgent > High > Normal > Low

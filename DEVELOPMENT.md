@@ -20,6 +20,9 @@ cargo build --release
 # Test and run
 cargo test
 cargo run --bin pure2p-tui
+
+# Clean build folder
+cargo clean
 ```
 
 ---
@@ -115,7 +118,7 @@ src/
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
-    └── tui.rs          # TUI binary (thin wrapper, triggers auto-connectivity)
+    └── tui.rs          # TUI binary (thin wrapper, starts transport server, triggers auto-connectivity)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.

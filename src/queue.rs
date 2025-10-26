@@ -416,6 +416,11 @@ impl MessageQueue {
         Ok(count)
     }
 
+    /// Get count of pending messages (alias for size, for clarity in UI)
+    pub fn count_pending(&self) -> Result<usize> {
+        self.size()
+    }
+
     /// Clear all messages from the queue
     pub fn clear(&mut self) -> Result<()> {
         self.conn.execute("DELETE FROM message_queue", [])?;

@@ -25,6 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create app state
     let mut app = App::new()?;
 
+    // Start transport server in background
+    app.start_transport()?;
+
     // Trigger background connectivity diagnostics on startup
     app.trigger_startup_connectivity();
 
