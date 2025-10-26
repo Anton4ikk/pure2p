@@ -20,8 +20,8 @@ pub struct ShareContactScreen {
 impl ShareContactScreen {
     /// Create new share contact screen
     pub fn new(keypair: &KeyPair, local_ip: &str) -> Self {
-        // Default: 30 days expiry
-        let expiry = Utc::now() + Duration::days(30);
+        // Default: 1 day expiry
+        let expiry = Utc::now() + Duration::days(1);
         let token = generate_contact_token(
             local_ip,
             &keypair.public_key,

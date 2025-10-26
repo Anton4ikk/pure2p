@@ -93,24 +93,30 @@ Alice's Client          Bob's Client
 | **Android** | 🔄 | Core ready, GUI pending |
 | **iOS** | 🔄 | Core ready, GUI pending |
 
-**Planned:** NAT Traversal, E2E Encryption (v0.3) • Desktop apps (v0.4) • Mobile apps (v0.5)
+**Planned:** Desktop apps (v0.4) • Mobile apps (v0.5)
 
 See [ROADMAP.md](ROADMAP.md) for timeline.
 
 ---
 
-## 🎯 Status (v0.3 - In Progress)
+## 🎯 Status (v0.3 - Complete)
 
 ### Implemented ✅
 
-**Core:**
+**Core Crypto:**
 - Ed25519 keypairs (signing/identity), X25519 keypairs (key exchange)
-- ECDH shared secret derivation (encryption-ready)
+- ECDH shared secret derivation for E2E encryption
+- XChaCha20-Poly1305 AEAD encryption with authentication
 - SHA-256 UID generation from Ed25519 pubkeys
-- CBOR serialization, HTTP transport
-- SQLite queue with retry
+- Ed25519 message signing and token verification
 - Contact tokens with dual pubkeys (Ed25519 + X25519)
-- State persistence
+
+**Protocol & Transport:**
+- CBOR/JSON message envelopes with encryption support
+- HTTP/1.1 server (`/output`, `/ping`, `/message`)
+- SQLite queue with exponential backoff retry
+- Encrypted and plaintext message types
+- State persistence (single-file JSON database)
 
 **NAT Traversal:**
 - IPv6 direct connectivity detection
@@ -122,25 +128,20 @@ See [ROADMAP.md](ROADMAP.md) for timeline.
 - Cross-platform gateway discovery (Linux, macOS, Windows)
 
 **TUI:**
-- Contact share/import with validation
+- Contact share/import with signature validation
 - Chat list with status badges (● ⌛ ⚠ ○)
-- Real-time messaging
+- E2E encrypted messaging
 - Delete with confirmation
 - Settings with auto-save
-- Startup sync progress
+- Automatic startup connectivity and sync
 - Diagnostics screen (port forwarding status, CGNAT warnings)
-
-### In Progress 🔄
-
-- End-to-end message encryption (using X25519 shared secrets)
-- Message authentication/signing
 
 ### Limitations ⚠️
 
-- Messages currently unencrypted (E2E encryption in progress)
 - Text only — rich media in v0.4
 - Manual peer management
 - CGNAT users need relay (future consideration)
+- No forward secrecy yet (planned for future)
 
 **This is a prototype.** See [ROADMAP.md](ROADMAP.md) for planned features.
 

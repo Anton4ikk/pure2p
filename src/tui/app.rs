@@ -509,6 +509,15 @@ impl App {
 
     /// Import a contact (chat will be created when first message is sent/received)
     pub fn import_contact(&mut self, contact: crate::storage::Contact) {
+        // Check if trying to import own contact (self-import)
+        if contact.uid == self.keypair.uid.to_string() {
+            if let Some(screen) = &mut self.import_contact_screen {
+                screen.status_message = Some("Error: Cannot import your own contact token".to_string());
+                screen.is_error = true;
+            }
+            return;
+        }
+
         // Check if contact already exists
         if !self.app_state.contacts.iter().any(|c| c.uid == contact.uid) {
             // Add contact to list

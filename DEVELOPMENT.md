@@ -83,7 +83,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (294 tests)
+├── tests/              # Unit tests (298 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -99,7 +99,7 @@ src/
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (118 tests)
+│   └── tui_tests/      # TUI module tests (122 tests)
 │       ├── mod.rs
 │       ├── app_tests.rs
 │       ├── screen_tests/     # Modularized screen tests (75 tests - consent removed)
@@ -131,7 +131,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (294 total)
+cargo test                     # All tests (298 total)
 
 # Quality
 cargo fmt                      # Format
@@ -173,8 +173,8 @@ git push origin feature/name
 
 ```
 src/tests/
-├── crypto_tests.rs       (11 tests)  - Keypair, signing, UID, X25519 ECDH
-├── protocol_tests.rs     (10 tests)  - Envelopes, serialization
+├── crypto_tests.rs       (27 tests)  - Keypair, signing, UID, X25519 ECDH, AEAD encryption, token signing
+├── protocol_tests.rs     (25 tests)  - Envelopes, serialization, E2E encryption
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
@@ -186,14 +186,14 @@ src/tests/
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
 │   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (118 tests) - Organized by TUI components
-    ├── app_tests.rs      (32 tests)  - App business logic
-    ├── screen_tests/     (75 tests)  - Modularized by screen type (consent screen removed)
+└── tui_tests/            (122 tests) - Organized by TUI components
+    ├── app_tests.rs      (35 tests)  - App business logic, self-import prevention
+    ├── screen_tests/     (76 tests)  - Modularized by screen type
     │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
     │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
     │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen
     │   ├── chat_view_tests.rs        (3 tests)   - ChatViewScreen
-    │   ├── settings_tests.rs         (9 tests)   - SettingsScreen
+    │   ├── settings_tests.rs         (10 tests)  - SettingsScreen
     │   ├── startup_sync_tests.rs     (10 tests)  - StartupSyncScreen
     │   ├── diagnostics_tests.rs      (20 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT)
     │   └── status_indicators_tests.rs (10 tests) - Status badges and contact expiry

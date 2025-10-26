@@ -132,7 +132,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::ShareContact => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char('c') => {
@@ -150,7 +150,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::ImportContact => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char(c) if c.is_ascii() && !c.is_control() => {
@@ -208,7 +208,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
                         // Normal chat list navigation
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
@@ -232,7 +232,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::ChatView => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_chat_list();
                             }
                             KeyCode::Char(c) if c.is_ascii() && !c.is_control() => {
@@ -269,7 +269,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::Settings => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char(c) if c.is_ascii_digit() => {
@@ -311,7 +311,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::Diagnostics => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char('r') | KeyCode::F(5) => {
