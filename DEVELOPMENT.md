@@ -83,7 +83,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (298 tests)
+├── tests/              # Unit tests (373 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -131,7 +131,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (298 total)
+cargo test                     # All tests (373 total)
 
 # Quality
 cargo fmt                      # Format

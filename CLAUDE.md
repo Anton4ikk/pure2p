@@ -121,7 +121,7 @@ cargo fmt
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time), automatic on startup if messages pending
 2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n), shows yellow warning during connectivity setup, shows red error block if all connectivity attempts fail
 3. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), 24-hour expiry countdown
-4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import
+4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat for imported contact
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 7. **Settings** - Edit retry interval (1-1440 min, 4-digit max input), auto-save with toast
@@ -251,7 +251,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (298 total tests)
+- All tests in `src/tests/` directory (373 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure

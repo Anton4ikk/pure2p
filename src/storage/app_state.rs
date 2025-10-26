@@ -28,12 +28,24 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Generate a random port in the dynamic/private port range (49152-65535)
+    ///
+    /// This range is officially designated by IANA for dynamic/private use and
+    /// is typically not blocked by ISPs. The large range (16,384 ports) ensures
+    /// that multiple devices on the same network will likely get different ports.
+    fn generate_random_port() -> u16 {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        // IANA dynamic/private port range: 49152-65535
+        rng.gen_range(49152..=65535)
+    }
+
     /// Create a new empty application state
     pub fn new() -> Self {
         Self {
             user_keypair: None, // Will be generated on first run
             user_ip: None,      // Will be detected by connectivity diagnostics
-            user_port: 8080,    // Default port
+            user_port: Self::generate_random_port(), // Random port for P2P
             contacts: Vec::new(),
             chats: Vec::new(),
             message_queue: Vec::new(),

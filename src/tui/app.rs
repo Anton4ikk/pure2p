@@ -168,13 +168,14 @@ impl App {
             if handle.is_finished() {
                 match handle.join() {
                     Ok(result) => {
-                        // Update local_ip from the mapping result
+                        // Update local_ip and port from the mapping result
                         if let Some(mapping) = &result.mapping {
                             let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
                             self.local_ip = detected_ip.clone();
 
-                            // Save detected IP to app_state for persistence
+                            // Save detected IP and port to app_state for persistence
                             self.app_state.user_ip = Some(detected_ip);
+                            self.app_state.user_port = mapping.external_port;
                             let _ = self.save_state();
                         }
                         self.connectivity_result = Some(result.clone());
@@ -365,13 +366,14 @@ impl App {
                 // Thread is done, get the result
                 match handle.join() {
                     Ok(result) => {
-                        // Update local_ip from the mapping result
+                        // Update local_ip and port from the mapping result
                         if let Some(mapping) = &result.mapping {
                             let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
                             self.local_ip = detected_ip.clone();
 
-                            // Save detected IP to app_state for persistence
+                            // Save detected IP and port to app_state for persistence
                             self.app_state.user_ip = Some(detected_ip);
+                            self.app_state.user_port = mapping.external_port;
                             let _ = self.save_state();
                         }
                         self.connectivity_result = Some(result.clone());
@@ -507,7 +509,7 @@ impl App {
         }
     }
 
-    /// Import a contact (chat will be created when first message is sent/received)
+    /// Import a contact and create a new chat
     pub fn import_contact(&mut self, contact: crate::storage::Contact) {
         // Check if trying to import own contact (self-import)
         if contact.uid == self.keypair.uid.to_string() {
@@ -520,15 +522,21 @@ impl App {
 
         // Check if contact already exists
         if !self.app_state.contacts.iter().any(|c| c.uid == contact.uid) {
+            let contact_uid = contact.uid.clone();
+
             // Add contact to list
             self.app_state.contacts.push(contact.clone());
 
-            // Auto-save after importing contact
+            // Create a new empty chat for this contact
+            let new_chat = crate::storage::Chat::new(contact_uid);
+            self.app_state.chats.push(new_chat);
+
+            // Auto-save after importing contact and creating chat
             let _ = self.save_state();
 
             // Update import screen status
             if let Some(screen) = &mut self.import_contact_screen {
-                screen.status_message = Some(format!("✓ Contact imported and saved!"));
+                screen.status_message = Some(format!("✓ Contact imported and chat created!"));
                 screen.is_error = false;
             }
         } else {

@@ -300,7 +300,7 @@ fn test_app_import_valid_contact() {
     let screen = app.import_contact_screen.as_ref().unwrap();
     assert!(!screen.is_error, "Should not be in error state");
     assert!(
-        screen.status_message.as_ref().unwrap().contains("imported and saved"),
+        screen.status_message.as_ref().unwrap().contains("imported and chat created"),
         "Should show success message"
     );
 
@@ -308,6 +308,12 @@ fn test_app_import_valid_contact() {
     assert!(
         app.app_state.contacts.iter().any(|c| c.uid == contact.uid),
         "Contact should be in contacts list"
+    );
+
+    // Verify a chat was created for the imported contact
+    assert!(
+        app.app_state.chats.iter().any(|c| c.contact_uid == contact.uid),
+        "Chat should be created for imported contact"
     );
 }
 
