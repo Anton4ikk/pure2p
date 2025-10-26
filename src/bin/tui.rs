@@ -25,8 +25,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create app state
     let mut app = App::new()?;
 
+    // Start transport server in background
+    app.start_transport()?;
+
+    // Trigger background connectivity diagnostics on startup
+    app.trigger_startup_connectivity();
+
     // Run main loop
     let res = run_app(&mut terminal, &mut app);
+
+    // Save application state before exit
+    if let Err(e) = app.save_state() {
+        eprintln!("Warning: Failed to save application state: {}", e);
+    }
 
     // Restore terminal
     disable_raw_mode()?;
@@ -51,6 +62,12 @@ fn run_app<B: ratatui::backend::Backend>(
     loop {
         terminal.draw(|f| ui(f, app))?;
 
+        // Poll for startup connectivity completion (runs in background on all screens)
+        // BUT: skip if on Diagnostics screen, since poll_diagnostics_result() handles it
+        if app.connectivity_result.is_none() && app.current_screen != Screen::Diagnostics {
+            app.poll_startup_connectivity();
+        }
+
         // Handle startup sync screen updates
         if app.current_screen == Screen::StartupSync {
             app.update_startup_sync();
@@ -62,6 +79,12 @@ fn run_app<B: ratatui::backend::Backend>(
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
             }
+        }
+
+        // Poll for diagnostics refresh completion
+        // This handles BOTH startup connectivity and manual refresh when on Diagnostics screen
+        if app.current_screen == Screen::Diagnostics {
+            app.poll_diagnostics_result();
         }
 
         if event::poll(std::time::Duration::from_millis(100))? {
@@ -112,7 +135,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::ShareContact => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char('c') => {
@@ -130,7 +153,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::ImportContact => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char(c) if c.is_ascii() && !c.is_control() => {
@@ -144,8 +167,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                             KeyCode::Enter => {
+                                // Parse token first
                                 if let Some(screen) = &mut app.import_contact_screen {
                                     screen.parse_token();
+                                }
+                                // Then get contact and import (separate scope to avoid double borrow)
+                                let contact_to_import = app.import_contact_screen.as_ref()
+                                    .and_then(|screen| screen.get_contact().cloned());
+                                if let Some(contact) = contact_to_import {
+                                    app.import_contact(contact);
                                 }
                             }
                             KeyCode::Char('v') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
@@ -181,7 +211,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
                         // Normal chat list navigation
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
@@ -205,7 +235,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::ChatView => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_chat_list();
                             }
                             KeyCode::Char(c) if c.is_ascii() && !c.is_control() => {
@@ -242,7 +272,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::Settings => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
                             KeyCode::Char(c) if c.is_ascii_digit() => {
@@ -256,8 +286,22 @@ fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                             KeyCode::Enter => {
-                                if let Some(screen) = &mut app.settings_screen {
-                                    screen.validate_and_save();
+                                // Validate input first
+                                let validated_minutes = app.settings_screen.as_mut()
+                                    .and_then(|screen| screen.validate());
+
+                                // If valid, update app_state and save
+                                if let Some(minutes) = validated_minutes {
+                                    app.app_state.settings.retry_interval_minutes = minutes;
+                                    app.app_state.settings.global_retry_interval_ms = (minutes as u64) * 60 * 1000;
+
+                                    // Save app state
+                                    let _ = app.save_state();
+
+                                    // Update screen with success message
+                                    if let Some(screen) = &mut app.settings_screen {
+                                        screen.set_saved_message(minutes);
+                                    }
                                 }
                             }
                             KeyCode::Delete => {
@@ -270,14 +314,14 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     Screen::Diagnostics => {
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
+                            KeyCode::Esc => {
                                 app.back_to_main_menu();
                             }
-                            KeyCode::Char('r') => {
+                            KeyCode::Char('r') | KeyCode::F(5) => {
                                 if let Some(screen) = &mut app.diagnostics_screen {
                                     if !screen.is_refreshing {
                                         screen.start_refresh();
-                                        // TODO: Actually trigger diagnostics refresh
+                                        app.trigger_diagnostics_refresh();
                                     }
                                 }
                             }

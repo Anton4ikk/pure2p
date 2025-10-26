@@ -435,3 +435,6 @@ async fn test_settings_manager_clone() {
     // Original sees the update
     assert_eq!(manager.get_storage_path().await, "/clone/path");
 }
+
+// Mapping Consent Tests
+

@@ -6,31 +6,35 @@ Development timeline and planned features.
 
 ---
 
-## 🔐 v0.3 - NAT Traversal
+## 🔐 v0.3 - NAT Traversal & E2E Encryption ✅
 
 **Focus:** P2P across NAT + E2E encryption
 
-### Planned
+### Completed ✅
 - **E2E Encryption**
-  - X25519 key exchange + ChaCha20-Poly1305
-  - Ed25519 signatures
-  - Per-session ephemeral keys
-  - Forward secrecy
+  - X25519 ECDH key exchange + XChaCha20-Poly1305 AEAD
+  - Ed25519 signatures for message authentication
+  - Contact token signing and verification
+  - Encrypted and plaintext message support
 
 - **NAT Traversal**
-  - STUN-like protocol (optional, self-hosted)
-  - UDP hole punching
-  - ICE-inspired negotiation
-  - Manual port forwarding fallback
+  - IPv6 direct connectivity detection
+  - PCP (Port Control Protocol, RFC 6887) with auto-renewal
+  - NAT-PMP (RFC 6886) with external IP detection
+  - UPnP IGD with auto-cleanup
+  - CGNAT detection (RFC 6598)
+  - Automatic fallback orchestration (IPv6 → PCP → NAT-PMP → UPnP)
+  - Cross-platform gateway discovery (Linux, macOS, Windows)
+  - Automatic connectivity on startup
 
-- **Peer-Assisted Discovery**
-  - Reachable peers for coordination
-  - Manual "introducer peer" selection
-  - No DHT/bootstrap servers
+### Future Enhancements (Post-1.0)
+- Per-session ephemeral keys for forward secrecy
+- UDP hole punching
+- Peer-assisted discovery (optional)
 
 ### Philosophy
-- NAT traversal is **optional**
-- Users choose: manual port forward (most private) vs self-hosted STUN vs community STUN
+- NAT traversal is **automatic** with graceful fallback
+- Users can manually port forward if preferred (most private)
 - **Never** introduce relay servers
 
 ---
@@ -122,7 +126,7 @@ Exploratory features for future consideration.
 |---------|--------|--------|
 | v0.1 | 2025-10 | ✅ Released |
 | v0.2 | 2025-10 | ✅ Released |
-| v0.3 | TBD | 📝 Planning |
+| v0.3 | 2025-10 | ✅ Released |
 | v0.4 | TBD | 📝 Planning |
 | v0.5 | TBD | 📝 Planning |
 

@@ -17,14 +17,13 @@ fn create_test_contact() -> Contact {
 }
 
 fn create_test_message(id: &str, sender: &str, recipient: &str) -> Message {
-    Message {
-        id: id.to_string(),
-        sender: sender.to_string(),
-        recipient: recipient.to_string(),
-        content: b"Test message content".to_vec(),
-        timestamp: Utc::now().timestamp_millis(),
-        delivered: false,
-    }
+    Message::new(
+        id.to_string(),
+        sender.to_string(),
+        recipient.to_string(),
+        b"Test message content".to_vec(),
+        Utc::now().timestamp_millis(),
+    )
 }
 
 #[tokio::test]

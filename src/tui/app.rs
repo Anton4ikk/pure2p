@@ -4,6 +4,8 @@ use crate::crypto::KeyPair;
 use crate::storage::{AppState, Message};
 use crate::tui::types::{Screen, MenuItem};
 use crate::tui::screens::*;
+use crate::transport::Transport;
+use crate::queue::MessageQueue;
 use chrono::Utc;
 
 /// Application state
@@ -36,26 +38,73 @@ pub struct App {
     pub diagnostics_screen: Option<DiagnosticsScreen>,
     /// Startup sync screen (when active)
     pub startup_sync_screen: Option<StartupSyncScreen>,
+    /// Background diagnostics refresh handle
+    pub diagnostics_refresh_handle: Option<std::thread::JoinHandle<crate::connectivity::ConnectivityResult>>,
+    /// Connectivity result from startup or last refresh
+    pub connectivity_result: Option<crate::connectivity::ConnectivityResult>,
+    /// Local port for connectivity
+    pub local_port: u16,
+    /// Path to app state file
+    state_path: String,
+    /// Transport layer for sending/receiving messages
+    pub transport: Transport,
+    /// Message queue for retry logic
+    pub queue: MessageQueue,
 }
 
 impl App {
     /// Create new application
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let keypair = KeyPair::generate()?;
-        let local_ip = Self::get_local_ip();
-        let app_state = AppState::new();
+    ///
+    /// # Arguments
+    /// * `state_path` - Optional path to app state file. Defaults to "app_state.json" if None.
+    ///                  Used primarily for testing to avoid polluting user's state.
+    pub fn new_with_settings<P: AsRef<std::path::Path>>(state_path: Option<P>) -> Result<Self, Box<dyn std::error::Error>> {
+        // Determine state file path
+        let state_path = state_path.as_ref()
+            .map(|p| p.as_ref().to_string_lossy().to_string())
+            .unwrap_or_else(|| "app_state.json".to_string());
 
-        // Simulate checking for pending messages
-        // In a real implementation, this would query the MessageQueue
-        let pending_count = 0; // TODO: Query actual queue
+        // Check if this is first run (file doesn't exist)
+        let is_first_run = !std::path::Path::new(&state_path).exists();
 
+        // Load or create app state (contacts, chats, messages, settings - everything!)
+        let mut app_state = AppState::load(&state_path).unwrap_or_else(|_| {
+            AppState::new() // Will have default settings
+        });
+
+        // Load or generate user keypair (persistent identity)
+        let keypair = if let Some(existing_keypair) = &app_state.user_keypair {
+            existing_keypair.clone()
+        } else {
+            // First run: generate new identity
+            let new_keypair = KeyPair::generate()?;
+            app_state.user_keypair = Some(new_keypair.clone());
+            new_keypair
+        };
+
+        // Load or use default network info
+        let local_ip = app_state.user_ip.clone().unwrap_or_else(Self::get_local_ip);
+        let local_port = app_state.user_port;
+
+        // Create transport layer
+        let transport = Transport::new();
+
+        // Create message queue (for retry logic)
+        let queue = MessageQueue::new()?;
+
+        // Check for pending messages in queue
+        let pending_count = queue.count_pending()?;
+
+        // Determine initial screen based on pending messages
         let (current_screen, startup_sync_screen) = if pending_count > 0 {
+            // Has pending messages: show startup sync
             (Screen::StartupSync, Some(StartupSyncScreen::new(pending_count)))
         } else {
+            // Normal startup: show main menu
             (Screen::MainMenu, None)
         };
 
-        Ok(Self {
+        let app = Self {
             current_screen,
             selected_index: 0,
             menu_items: MenuItem::all(),
@@ -70,8 +119,138 @@ impl App {
             settings_screen: None,
             diagnostics_screen: None,
             startup_sync_screen,
-        })
+            diagnostics_refresh_handle: None,
+            connectivity_result: None,
+            local_port,
+            state_path,
+            transport,
+            queue,
+        };
+
+        // Save initial state on first run
+        if is_first_run {
+            let _ = app.save_state();
+        }
+
+        Ok(app)
     }
+
+    /// Create new application with default state path
+    ///
+    /// This is a convenience wrapper around `new_with_settings(None)`.
+    /// For production use, all data will be stored in "app_state.json" in the project root.
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_settings(None::<&str>)
+    }
+
+    /// Save application state to disk
+    ///
+    /// Persists contacts, chats, and messages to app_state.json
+    pub fn save_state(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.app_state.save(&self.state_path)?;
+        Ok(())
+    }
+
+    /// Start transport server in background
+    ///
+    /// This starts the HTTP server to receive messages and pings.
+    /// Handlers are set up to automatically create chats when pings are received.
+    pub fn start_transport(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Set local UID for transport
+        let uid = self.keypair.uid.to_string();
+        let transport = self.transport.clone();
+        let local_port = self.local_port;
+        let state_path = self.state_path.clone();
+
+        // Setup ping handler to create chat when ping is received
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(async move {
+                // Set local UID
+                transport.set_local_uid(uid).await;
+
+                // Setup ping handler
+                let state_path_for_handler = state_path.clone();
+                transport.set_ping_handler(move |sender_uid: String| {
+                    // Load app state, create/update chat, save
+                    if let Ok(mut app_state) = AppState::load(&state_path_for_handler) {
+                        let chat = app_state.get_or_create_chat(&sender_uid);
+                        chat.mark_unread(); // Mark as active (new ping received)
+                        let _ = app_state.save(&state_path_for_handler);
+                        tracing::info!("Created/updated chat for ping from {}", sender_uid);
+                    }
+                }).await;
+
+                // Start server
+                let addr = format!("0.0.0.0:{}", local_port).parse().expect("Invalid address");
+                if let Err(e) = transport.clone().start(addr).await {
+                    tracing::error!("Transport server failed: {}", e);
+                }
+            });
+        });
+
+        Ok(())
+    }
+
+    /// Trigger startup connectivity diagnostics (non-blocking)
+    ///
+    /// Should be called after App::new() to detect external IP for contact sharing.
+    pub fn trigger_startup_connectivity(&mut self) {
+        // Don't start if already running
+        if self.diagnostics_refresh_handle.is_some() {
+            return;
+        }
+
+        let port = self.local_port;
+
+        // Spawn background thread with tokio runtime
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(async move {
+                crate::connectivity::establish_connectivity(port).await
+            })
+        });
+
+        self.diagnostics_refresh_handle = Some(handle);
+    }
+
+    /// Poll for startup connectivity completion and update local IP
+    ///
+    /// Returns true if connectivity completed this call.
+    pub fn poll_startup_connectivity(&mut self) -> bool {
+        if let Some(handle) = self.diagnostics_refresh_handle.take() {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(result) => {
+                        // Update local_ip and port from the mapping result
+                        if let Some(mapping) = &result.mapping {
+                            let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                            self.local_ip = detected_ip.clone();
+
+                            // Save detected IP and port to app_state for persistence
+                            self.app_state.user_ip = Some(detected_ip);
+                            self.app_state.user_port = mapping.external_port;
+                            let _ = self.save_state();
+                        }
+                        self.connectivity_result = Some(result.clone());
+
+                        // Apply result to diagnostics screen if it's already open
+                        self.apply_connectivity_result(result);
+                        return true;
+                    }
+                    Err(_) => {
+                        // Failed to get connectivity, keep default local_ip
+                        return true;
+                    }
+                }
+            } else {
+                // Thread still running, put it back
+                self.diagnostics_refresh_handle = Some(handle);
+            }
+        }
+        false
+    }
+
 
     /// Get currently selected menu item
     pub fn selected_item(&self) -> MenuItem {
@@ -136,17 +315,22 @@ impl App {
 
     /// Show settings screen
     pub fn show_settings_screen(&mut self) {
-        self.settings_screen = Some(SettingsScreen::new("settings.json".to_string()));
+        let current_interval = self.app_state.settings.retry_interval_minutes;
+        self.settings_screen = Some(SettingsScreen::new(current_interval));
         self.current_screen = Screen::Settings;
     }
 
     /// Show diagnostics screen
     pub fn show_diagnostics_screen(&mut self) {
-        let default_port = 8080; // TODO: Get from actual listening port
-        let mut screen = DiagnosticsScreen::new(default_port);
+        let mut screen = DiagnosticsScreen::new(self.local_port);
 
         // Populate with current app state data
         self.update_diagnostics_with_app_state(&mut screen);
+
+        // Apply existing connectivity result if available
+        if let Some(result) = &self.connectivity_result {
+            screen.update_from_connectivity_result(result);
+        }
 
         self.diagnostics_screen = Some(screen);
         self.current_screen = Screen::Diagnostics;
@@ -197,6 +381,79 @@ impl App {
 
             // Set queue size
             screen.set_queue_size(queue_size);
+        }
+    }
+
+    /// Trigger async diagnostics refresh (non-blocking)
+    ///
+    /// This spawns a background thread with a tokio runtime to perform
+    /// connectivity tests. Results are automatically polled in `poll_diagnostics_result()`.
+    pub fn trigger_diagnostics_refresh(&mut self) {
+        // Don't start a new refresh if one is already running
+        if self.diagnostics_refresh_handle.is_some() {
+            return;
+        }
+
+        if let Some(screen) = &mut self.diagnostics_screen {
+            let port = screen.local_port;
+
+            // Spawn background thread with tokio runtime
+            let handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async move {
+                    crate::connectivity::establish_connectivity(port).await
+                })
+            });
+
+            self.diagnostics_refresh_handle = Some(handle);
+        }
+    }
+
+    /// Poll for diagnostics refresh completion (non-blocking)
+    ///
+    /// Checks if the background refresh thread has completed and applies results.
+    /// Returns true if a refresh was completed this call.
+    pub fn poll_diagnostics_result(&mut self) -> bool {
+        if let Some(handle) = self.diagnostics_refresh_handle.take() {
+            // Check if thread is finished (non-blocking)
+            if handle.is_finished() {
+                // Thread is done, get the result
+                match handle.join() {
+                    Ok(result) => {
+                        // Update local_ip and port from the mapping result
+                        if let Some(mapping) = &result.mapping {
+                            let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                            self.local_ip = detected_ip.clone();
+
+                            // Save detected IP and port to app_state for persistence
+                            self.app_state.user_ip = Some(detected_ip);
+                            self.app_state.user_port = mapping.external_port;
+                            let _ = self.save_state();
+                        }
+                        self.connectivity_result = Some(result.clone());
+                        self.apply_connectivity_result(result);
+                        return true;
+                    }
+                    Err(e) => {
+                        if let Some(screen) = &mut self.diagnostics_screen {
+                            screen.set_status_message(format!("Refresh failed: {:?}", e));
+                            screen.is_refreshing = false;
+                        }
+                        return true;
+                    }
+                }
+            } else {
+                // Thread is still running, put the handle back
+                self.diagnostics_refresh_handle = Some(handle);
+            }
+        }
+        false
+    }
+
+    /// Apply connectivity result to diagnostics screen
+    pub fn apply_connectivity_result(&mut self, result: crate::connectivity::ConnectivityResult) {
+        if let Some(screen) = &mut self.diagnostics_screen {
+            screen.update_from_connectivity_result(&result);
         }
     }
 
@@ -290,6 +547,9 @@ impl App {
                     }
                 }
 
+                // Auto-save after deleting chat
+                let _ = self.save_state();
+
                 // TODO: Actually send delete request via transport if chat was active
                 // For now, we just delete locally
             }
@@ -300,6 +560,61 @@ impl App {
     pub fn cancel_delete_chat(&mut self) {
         if let Some(screen) = &mut self.chat_list_screen {
             screen.hide_delete_popup();
+        }
+    }
+
+    /// Import a contact and create a new chat
+    pub fn import_contact(&mut self, contact: crate::storage::Contact) {
+        // Check if trying to import own contact (self-import)
+        if contact.uid == self.keypair.uid.to_string() {
+            if let Some(screen) = &mut self.import_contact_screen {
+                screen.status_message = Some("Error: Cannot import your own contact token".to_string());
+                screen.is_error = true;
+            }
+            return;
+        }
+
+        // Check if contact already exists
+        if !self.app_state.contacts.iter().any(|c| c.uid == contact.uid) {
+            let contact_uid = contact.uid.clone();
+
+            // Add contact to list
+            self.app_state.contacts.push(contact.clone());
+
+            // Create a new chat for this contact and mark as pending
+            // (waiting for ping response)
+            let mut new_chat = crate::storage::Chat::new(contact_uid);
+            new_chat.mark_has_pending(); // Show ⌛ Pending status until ping response
+            self.app_state.chats.push(new_chat);
+
+            // Auto-save after importing contact and creating chat
+            let _ = self.save_state();
+
+            // Send ping to the contact in background thread
+            let transport = self.transport.clone();
+            let contact_for_ping = contact.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async move {
+                    if let Err(e) = transport.send_ping(&contact_for_ping).await {
+                        tracing::warn!("Failed to ping newly imported contact {}: {}", contact_for_ping.uid, e);
+                    } else {
+                        tracing::info!("Successfully pinged newly imported contact {}", contact_for_ping.uid);
+                    }
+                });
+            });
+
+            // Update import screen status
+            if let Some(screen) = &mut self.import_contact_screen {
+                screen.status_message = Some(format!("✓ Contact imported, ping sent!"));
+                screen.is_error = false;
+            }
+        } else {
+            // Contact already exists
+            if let Some(screen) = &mut self.import_contact_screen {
+                screen.status_message = Some("Contact already exists".to_string());
+                screen.is_error = true;
+            }
         }
     }
 
@@ -316,18 +631,20 @@ impl App {
             // Find the chat and add the message
             if let Some(chat) = self.app_state.chats.iter_mut().find(|c| c.contact_uid == contact_uid) {
                 // Create a new message
-                let message = Message {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    sender: self.keypair.uid.to_string(),
-                    recipient: contact_uid.clone(),
-                    content: message_content.as_bytes().to_vec(),
-                    timestamp: Utc::now().timestamp_millis(),
-                    delivered: false, // Will be marked true when actually sent
-                };
+                let message = Message::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    self.keypair.uid.to_string(),
+                    contact_uid.clone(),
+                    message_content.as_bytes().to_vec(),
+                    Utc::now().timestamp_millis(),
+                );
 
                 chat.append_message(message);
                 chat_view.clear_input();
                 chat_view.set_status("Message queued for sending".to_string());
+
+                // Auto-save after sending message
+                let _ = self.save_state();
 
                 // TODO: Actually send via transport layer
                 // For now, messages are just stored locally

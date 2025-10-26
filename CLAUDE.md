@@ -35,7 +35,15 @@ cargo fmt
 
 **`transport`** - HTTP/1.1 server with `/output`, `/ping`, `/message` endpoints. Peer management, delivery tracking.
 
-**`storage`** - Contact/Chat structures, signed contact token generation (base64 CBOR + Ed25519 signature), AppState persistence (JSON/CBOR), Settings with auto-save
+**`storage`** - Modular storage system for persistent data:
+- `contact.rs` - Contact struct and signed token generation/verification (base64 CBOR + Ed25519 signature)
+- `message.rs` - Message struct and delivery status tracking
+- `chat.rs` - Chat conversation management
+- `settings.rs` - Application settings struct
+- `settings_manager.rs` - Thread-safe settings access for UI
+- `app_state.rs` - AppState persistence (JSON/CBOR) - single file database for all data (contacts, chats, messages, settings)
+- `storage_db.rs` - Low-level SQLite storage (unimplemented)
+- `mod.rs` - Public API with re-exports
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
 
@@ -55,7 +63,7 @@ cargo fmt
 **`tui`** - Terminal UI module (library, not binary). Reusable across platforms:
 - `types.rs` - Screen and MenuItem enums
 - `screens.rs` - All screen state structs (ShareContact, ImportContact, ChatList, ChatView, Settings, Diagnostics, StartupSync)
-- `app.rs` - Main App struct with business logic
+- `app.rs` - Main App struct with business logic, automatic background connectivity on startup
 - `ui.rs` - Rendering functions (ratatui-based)
 
 ## Data Structures
@@ -64,49 +72,70 @@ cargo fmt
 
 **Chat** - `contact_uid`, `messages[]`, `is_active`, `has_pending_messages`. Methods: `append_message()`, `mark_unread()`, `mark_has_pending()`
 
-**AppState** - `contacts[]`, `chats[]`, `message_queue[]`, `settings`. Methods: `get_chat()`, `sync_pending_status()`, `save()`/`load()`
+**AppState** - `user_keypair`, `user_ip`, `user_port`, `contacts[]`, `chats[]`, `message_queue[]`, `settings`. Methods: `get_chat()`, `sync_pending_status()`, `save()`/`load()`. **Single source of truth**: All app data persisted in `app_state.json`, loaded on startup, auto-saved on all state changes (import contact, send message, delete chat, change settings, connectivity detected).
 
-**Settings** - Retry intervals, storage path, contact expiry, max retries. Auto-save to JSON. Thread-safe SettingsManager for UI.
+**User Identity** - Ed25519 + X25519 keypair generated once on first run, stored in `app_state.json`. UID remains constant across restarts. Contacts can reliably message you back.
+
+**Settings** - Retry intervals, storage path, contact expiry, max retries. Stored within AppState.
+
+**App (TUI)** - Main application state with automatic connectivity, transport, and persistence:
+- `app_state` - Loaded from `app_state.json` on startup, saved on exit and after changes
+- `state_path` - Path to state file (default: `app_state.json`, tests use temp dirs)
+- `transport` - HTTP transport layer for sending/receiving messages and pings
+- `queue` - SQLite-backed message queue for retry logic
+- `connectivity_result` - Stores startup/latest connectivity test results
+- `local_ip` - Automatically updated from connectivity results (external IP:port)
+- `local_port` - Port for listening and connectivity tests (default: 8080)
+- `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
+- Startup: Loads all data from `app_state.json`, starts transport server, runs `establish_connectivity()` in background
+- Transport: Runs HTTP server in background thread, handles incoming pings (auto-creates chats), messages
+- ShareContact: Uses detected external IP for accurate contact tokens
+- ImportContact: Automatically sends ping to imported contact to notify them
+- Persistence: Auto-saves state after import/send/delete/settings operations, ping handler auto-saves when creating chats
 
 ## TUI Architecture
 
-**Binary (`src/bin/tui.rs`)** - Thin wrapper (~280 lines):
-- `main()` - Terminal initialization/cleanup
+**Binary (`src/bin/tui.rs`)** - Thin wrapper (~340 lines):
+- `main()` - Terminal initialization/cleanup, starts transport server, triggers startup connectivity
 - `run_app()` - Event loop with 100ms polling
+- Polls for startup connectivity completion (updates `local_ip` when ready)
+- Polls for diagnostics refresh completion (when on Diagnostics screen)
 - Keyboard mapping to App methods
 
 **Library (`src/tui/`)** - Reusable UI logic:
 - Used by TUI binary, future mobile/desktop UIs
-- Fully tested (301 unit tests)
+- Fully tested (119 TUI unit tests)
 - Platform-agnostic business logic
 - Modular UI rendering (`ui/` directory with per-screen modules)
+- Background async connectivity via spawned threads with tokio runtime
 
 **UI Module Structure (`src/tui/ui/`):**
 - `mod.rs` - Main `ui()` dispatcher and re-exports
 - `startup_sync.rs` - Startup sync progress screen
 - `main_menu.rs` - Main menu with hotkey navigation (c/s/i/n)
-- `share_contact.rs` - Contact token generation screen
+- `share_contact.rs` - Contact token generation screen (uses auto-detected external IP)
 - `import_contact.rs` - Contact token import screen
 - `chat_list.rs` - Chat list with delete confirmation popup
 - `chat_view.rs` - Individual chat conversation view
 - `settings.rs` - Settings configuration screen
-- `diagnostics.rs` - Network diagnostics (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size)
+- `diagnostics.rs` - Network diagnostics with manual refresh (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size, CGNAT detection)
 - `helpers.rs` - Shared UI utilities (`format_duration_until`)
 
 **Screens:**
-1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time)
-2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n)
-3. **ShareContact** - Generate tokens (copy/save), shows UID/IP, expiry countdown
-4. **ImportContact** - Parse/validate tokens, expiry check, signature verification
+1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time), automatic on startup if messages pending
+2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n), shows yellow warning during connectivity setup, shows red error block if all connectivity attempts fail
+3. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), 24-hour expiry countdown
+4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat with ⌛ Pending status, sends ping to notify imported contact (background thread)
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
-7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
-8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection
+7. **Settings** - Edit retry interval (1-1440 min, 4-digit max input), auto-save with toast
+8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection, manual refresh (r/F5) triggers background async tests, smart color logic: failed attempts shown in yellow (warning) if any protocol succeeded, red (error) if all failed
 
 **Keyboard:**
-- Global: q/Esc=back/quit, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
-- Main menu: c=chats, s=share, i=import, n=diagnostics
+- Global: Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
+- Main menu: q/Esc=quit, c=chats, s=share, i=import, n=diagnostics
 - Diagnostics: r/F5=refresh
+- Text input screens (ImportContact, ChatView, Settings): All ASCII characters can be typed, Esc to go back
 
 **Colors:** Cyan=titles, Green=success/active, Yellow=warning/pending, Red=error/expired, Gray=inactive
 
@@ -132,8 +161,11 @@ cargo fmt
 
 ### Transport
 - Hyper HTTP/1.1 server/client
-- Endpoints: `/output` (legacy), `/ping` (connectivity), `/message` (new)
-- Dual handlers: MessageHandler (legacy), NewMessageHandler (AppState)
+- Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new)
+- Handlers: MessageHandler (legacy), NewMessageHandler (AppState), PingHandler (auto-create chats)
+- **PingRequest**: `{from_uid: String}` - sent on contact import to notify peer
+- **PingResponse**: `{uid: String, status: String}` - confirms peer is online
+- **Ping flow**: Import contact → send PingRequest → peer receives → PingHandler creates chat → PingResponse returned
 
 ### Queue
 - Priority: Urgent > High > Normal > Low
@@ -142,11 +174,43 @@ cargo fmt
 - Auto-remove after max retries
 
 ### Storage
-- **Contact tokens**: Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
-- **Token security**: Signature verified on import, rejects tampered/forged tokens
-- Settings: JSON file, auto-create parent dirs
-- AppState: JSON/CBOR serialization
+
+**Module Architecture** (8 files, ~150-400 lines each):
+- `contact.rs` - Contact struct with token generation/parsing
+- `message.rs` - Message struct with delivery status (Sent, Delivered, Pending, Failed)
+- `chat.rs` - Chat conversation management
+- `settings.rs` - Settings struct
+- `settings_manager.rs` - Thread-safe SettingsManager (Arc<RwLock<Settings>>)
+- `app_state.rs` - AppState struct with save/load (JSON/CBOR) - **single file database**
+- `storage_db.rs` - Low-level SQLite Storage (unimplemented)
+- `mod.rs` - Public API with re-exports
+
+**Contact Tokens**:
+- Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
+- Signature verified on import, rejects tampered/forged tokens
 - Contact struct stores both pubkeys for dual-purpose: identity (Ed25519) and encryption (X25519)
+- Default expiry: 24 hours (1 day)
+- Self-import validation: Rejects tokens with your own UID
+
+**Persistence (app_state.json)**:
+- **Single file database**: All data (user identity, network info, contacts, chats, messages, settings) in one JSON file
+- **User Identity**: Keypair generated on first run, persisted forever. UID never changes.
+- **Network Info**: Detected external IP/port saved after connectivity diagnostics
+- **Created on first run**: File created immediately with:
+  - Generated keypair (your permanent identity)
+  - Default settings
+  - Empty contacts/chats lists
+- **Auto-save**: State saved automatically after any data modification:
+  - Import contact → save
+  - Send message → save
+  - Delete chat → save
+  - Change settings → save
+  - Connectivity detected → save (IP/port)
+  - App exit → save
+- **Auto-load**: Full state loaded on app startup (keypair, IP, contacts, chats, etc.)
+- **Test isolation**: Tests use temp directories to avoid polluting user data
+- AppState: JSON/CBOR serialization, sync_pending_status() updates chat flags
+- **Location**: Project root (`./app_state.json`) for production, temp dirs for tests
 
 ### Messaging
 - `send_message()` → auto-queue on fail
@@ -175,6 +239,9 @@ cargo fmt
 - Stops on first success, continues through all on failure
 - `result.summary()` generates UX string: "⚠️ CGNAT → IPv6: no → PCP: ok" (if CGNAT detected)
 - CGNAT detection runs automatically after each successful mapping
+- **Automatic on startup**: TUI triggers connectivity test in background thread on app launch
+- **Manual refresh**: Diagnostics screen 'r'/F5 keys trigger new background test
+- Results stored in `App.connectivity_result`, external IP auto-updates `App.local_ip`
 
 **Protocol Details**:
 - **PCP** (RFC 6887): 60-byte MAP requests, up to 1100-byte responses, UDP port 5351
@@ -191,7 +258,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (301 total tests)
+- All tests in `src/tests/` directory (373 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -205,21 +272,21 @@ cargo fmt
 - `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
-**`storage_tests/` (62 tests):**
+**`storage_tests/` (56 tests):**
 - `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
 - `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
 - `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
 - `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
-- `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
+- `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
-**`tui_tests/` (125 tests):**
-- `app_tests.rs` (36 tests) - App struct and business logic
-- `screen_tests/` (82 tests) - All screens, modularized by screen type:
+**`tui_tests/` (122 tests):**
+- `app_tests.rs` (35 tests) - App struct and business logic (includes self-import rejection, valid import, duplicate import)
+- `screen_tests/` (76 tests) - All screens, modularized by screen type (consent screen removed):
   - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
   - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)
   - `chat_list_tests.rs` (5 tests) - ChatListScreen (navigation, delete popup)
   - `chat_view_tests.rs` (3 tests) - ChatViewScreen (input, scrolling)
-  - `settings_tests.rs` (9 tests) - SettingsScreen (validation, persistence)
+  - `settings_tests.rs` (10 tests) - SettingsScreen (validation, persistence, 4-digit max length)
   - `startup_sync_tests.rs` (10 tests) - StartupSyncScreen (progress tracking)
   - `diagnostics_tests.rs` (20 tests) - DiagnosticsScreen (IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size, CGNAT)
   - `status_indicators_tests.rs` (10 tests) - Status badges and contact expiry
@@ -227,7 +294,7 @@ cargo fmt
 - `types_tests.rs` (3 tests) - MenuItem enum
 - `ui_tests.rs` (4 tests) - UI helper functions (format_duration_until)
 
-**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files) for maintainability. Screen tests are modularized in `screen_tests/` subdirectory for easier navigation and maintenance.
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files: 8 screens + mod.rs + helpers.rs) for maintainability. Screen tests are modularized in `screen_tests/` subdirectory for easier navigation and maintenance.
 
 ## Dependencies
 

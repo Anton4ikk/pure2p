@@ -1,30 +1,21 @@
 // SettingsScreen Tests - Testing settings configuration screen
 
-use crate::storage::Settings;
 use crate::tui::screens::SettingsScreen;
-use tempfile::NamedTempFile;
 
 #[test]
 fn test_settings_screen_creation() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
+    let screen = SettingsScreen::new(10); // Default is 10 minutes
 
-    let screen = SettingsScreen::new(path.clone());
-
-    // Should load default settings
-    assert_eq!(screen.retry_interval_input, "10"); // Default is 10 minutes
+    // Should initialize with provided retry interval
+    assert_eq!(screen.retry_interval_input, "10");
     assert_eq!(screen.selected_field, 0);
     assert!(screen.status_message.is_some());
     assert!(!screen.is_error);
-    assert_eq!(screen.settings_path, path);
 }
 
 #[test]
 fn test_settings_screen_add_char() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
-
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
     screen.clear_input();
 
     // Should accept digits
@@ -43,11 +34,35 @@ fn test_settings_screen_add_char() {
 }
 
 #[test]
-fn test_settings_screen_backspace() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
+fn test_settings_screen_add_char_max_length() {
+    // No longer needed
+    
 
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
+    screen.clear_input();
+
+    // Should accept up to 4 digits
+    screen.add_char('1');
+    screen.add_char('2');
+    screen.add_char('3');
+    screen.add_char('4');
+    assert_eq!(screen.retry_interval_input, "1234");
+
+    // Should reject 5th digit
+    screen.add_char('5');
+    assert_eq!(screen.retry_interval_input, "1234");
+
+    // Should still reject 6th digit
+    screen.add_char('6');
+    assert_eq!(screen.retry_interval_input, "1234");
+}
+
+#[test]
+fn test_settings_screen_backspace() {
+    // No longer needed
+    
+
+    let mut screen = SettingsScreen::new(10);
     screen.retry_interval_input = "123".to_string();
 
     screen.backspace();
@@ -66,10 +81,10 @@ fn test_settings_screen_backspace() {
 
 #[test]
 fn test_settings_screen_clear_input() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
+    // No longer needed
+    
 
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
     screen.retry_interval_input = "123".to_string();
 
     screen.clear_input();
@@ -78,78 +93,58 @@ fn test_settings_screen_clear_input() {
 
 #[test]
 fn test_settings_screen_validate_empty() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
-
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
     screen.clear_input();
 
-    let result = screen.validate_and_save();
+    let result = screen.validate();
 
-    assert!(!result);
+    assert!(result.is_none());
     assert!(screen.is_error);
     assert!(screen.status_message.as_ref().unwrap().contains("empty"));
 }
 
 #[test]
 fn test_settings_screen_validate_zero() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
-
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
     screen.retry_interval_input = "0".to_string();
 
-    let result = screen.validate_and_save();
+    let result = screen.validate();
 
-    assert!(!result);
+    assert!(result.is_none());
     assert!(screen.is_error);
     assert!(screen.status_message.as_ref().unwrap().contains("at least 1"));
 }
 
 #[test]
 fn test_settings_screen_validate_too_large() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
-
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
     screen.retry_interval_input = "2000".to_string();
 
-    let result = screen.validate_and_save();
+    let result = screen.validate();
 
-    assert!(!result);
+    assert!(result.is_none());
     assert!(screen.is_error);
     assert!(screen.status_message.as_ref().unwrap().contains("1440"));
 }
 
 #[test]
 fn test_settings_screen_validate_valid() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
-
-    let mut screen = SettingsScreen::new(path);
+    let mut screen = SettingsScreen::new(10);
     screen.retry_interval_input = "30".to_string();
 
-    let result = screen.validate_and_save();
+    let result = screen.validate();
 
-    assert!(result);
+    assert_eq!(result, Some(30));
     assert!(!screen.is_error);
-    assert!(screen.status_message.as_ref().unwrap().contains("✓"));
-    assert!(screen.status_message.as_ref().unwrap().contains("30"));
 }
 
 #[test]
-fn test_settings_screen_save_persists() {
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let path = temp_file.path().to_string_lossy().to_string();
+fn test_settings_screen_set_saved_message() {
+    let mut screen = SettingsScreen::new(10);
 
-    let mut screen = SettingsScreen::new(path.clone());
-    screen.retry_interval_input = "45".to_string();
+    screen.set_saved_message(45);
 
-    let result = screen.validate_and_save();
-    assert!(result);
-
-    // Load settings from file to verify
-    let settings = Settings::load(&path).expect("Failed to load settings");
-    assert_eq!(settings.retry_interval_minutes, 45);
-    assert_eq!(settings.global_retry_interval_ms, 45 * 60 * 1000);
+    assert!(!screen.is_error);
+    assert!(screen.status_message.as_ref().unwrap().contains("✓"));
+    assert!(screen.status_message.as_ref().unwrap().contains("45"));
 }

@@ -52,6 +52,13 @@ pub enum DeliveryState {
     Failed,
 }
 
+/// Ping request structure
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PingRequest {
+    /// UID of the sender
+    pub from_uid: String,
+}
+
 /// Ping response structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PingResponse {
@@ -78,7 +85,11 @@ pub type MessageHandler = Arc<dyn Fn(MessageEnvelope) + Send + Sync>;
 /// Callback type for handling received messages from /message endpoint
 pub type NewMessageHandler = Arc<dyn Fn(MessageRequest) + Send + Sync>;
 
+/// Callback type for handling received ping requests
+pub type PingHandler = Arc<dyn Fn(String) + Send + Sync>;
+
 /// Network transport layer
+#[derive(Clone)]
 pub struct Transport {
     /// Local binding address
     local_addr: Option<SocketAddr>,
@@ -88,6 +99,8 @@ pub struct Transport {
     message_handler: Arc<Mutex<Option<MessageHandler>>>,
     /// New message handler callback (for /message endpoint)
     pub(crate) new_message_handler: Arc<Mutex<Option<NewMessageHandler>>>,
+    /// Ping handler callback (for /ping endpoint)
+    pub(crate) ping_handler: Arc<Mutex<Option<PingHandler>>>,
     /// HTTP client for sending messages
     client: Client<HttpConnector, Full<Bytes>>,
     /// Local UID for ping responses
@@ -104,6 +117,7 @@ impl Transport {
             peers: Arc::new(Mutex::new(Vec::new())),
             message_handler: Arc::new(Mutex::new(None)),
             new_message_handler: Arc::new(Mutex::new(None)),
+            ping_handler: Arc::new(Mutex::new(None)),
             client,
             local_uid: Arc::new(Mutex::new(None)),
         }
@@ -136,6 +150,18 @@ impl Transport {
         *guard = Some(Arc::new(handler));
     }
 
+    /// Set the ping handler callback (for /ping endpoint)
+    ///
+    /// This handler receives the sender's UID when a ping request is received.
+    /// The handler can create a chat or perform other actions based on the ping.
+    pub async fn set_ping_handler<F>(&self, handler: F)
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        let mut guard = self.ping_handler.lock().await;
+        *guard = Some(Arc::new(handler));
+    }
+
     /// Start the transport layer and listen for incoming connections
     pub async fn start(&mut self, addr: SocketAddr) -> Result<()> {
         info!("Starting transport on {}", addr);
@@ -152,6 +178,7 @@ impl Transport {
 
         let message_handler = self.message_handler.clone();
         let new_message_handler = self.new_message_handler.clone();
+        let ping_handler = self.ping_handler.clone();
         let local_uid = self.local_uid.clone();
 
         // Spawn listener task
@@ -164,11 +191,12 @@ impl Transport {
                         let io = TokioIo::new(stream);
                         let handler = message_handler.clone();
                         let new_handler = new_message_handler.clone();
+                        let ping_h = ping_handler.clone();
                         let uid = local_uid.clone();
 
                         tokio::spawn(async move {
                             let service = service_fn(move |req| {
-                                handle_request(req, handler.clone(), new_handler.clone(), uid.clone())
+                                handle_request(req, handler.clone(), new_handler.clone(), ping_h.clone(), uid.clone())
                             });
 
                             if let Err(e) = http1::Builder::new()
@@ -300,6 +328,18 @@ impl Transport {
     pub async fn send_ping(&self, contact: &crate::storage::Contact) -> Result<PingResponse> {
         info!("Sending ping to {} at {}", contact.uid, contact.ip);
 
+        // Get local UID to send in ping request
+        let uid_guard = self.local_uid.lock().await;
+        let from_uid = uid_guard.as_ref().map(|s| s.clone()).unwrap_or_else(|| "unknown".to_string());
+        drop(uid_guard);
+
+        // Create ping request with sender's UID
+        let ping_request = PingRequest { from_uid };
+
+        // Serialize to CBOR
+        let ping_body = serde_cbor::to_vec(&ping_request)
+            .map_err(|e| Error::CborSerialization(format!("Failed to serialize ping request: {}", e)))?;
+
         // Construct the POST request to /ping
         let url = format!("http://{}/ping", contact.ip);
 
@@ -307,7 +347,7 @@ impl Transport {
             .method(Method::POST)
             .uri(&url)
             .header("Content-Type", "application/cbor")
-            .body(Full::new(Bytes::new()))
+            .body(Full::new(Bytes::from(ping_body)))
             .map_err(|e| Error::Transport(format!("Failed to build ping request: {}", e)))?;
 
         // Send the request
@@ -447,6 +487,7 @@ async fn handle_request(
     req: Request<Incoming>,
     message_handler: Arc<Mutex<Option<MessageHandler>>>,
     new_message_handler: Arc<Mutex<Option<NewMessageHandler>>>,
+    ping_handler: Arc<Mutex<Option<PingHandler>>>,
     local_uid: Arc<Mutex<Option<String>>>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     match (req.method(), req.uri().path()) {
@@ -492,33 +533,62 @@ async fn handle_request(
         (&Method::POST, "/ping") => {
             debug!("Received POST /ping request");
 
-            // Get local UID
-            let uid_guard = local_uid.lock().await;
-            let uid = uid_guard.as_ref().map(|s| s.clone()).unwrap_or_else(|| "unknown".to_string());
-            drop(uid_guard);
+            // Read the body to get sender's UID
+            let body = req.collect().await?.to_bytes();
 
-            // Create ping response
-            let response = PingResponse {
-                uid,
-                status: "ok".to_string(),
-            };
+            // Deserialize the ping request from CBOR
+            match serde_cbor::from_slice::<PingRequest>(&body) {
+                Ok(ping_req) => {
+                    info!("Received ping from {}", ping_req.from_uid);
 
-            // Serialize to CBOR
-            match serde_cbor::to_vec(&response) {
-                Ok(cbor_data) => {
-                    info!("Responding to ping");
-                    Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/cbor")
-                        .body(Full::new(Bytes::from(cbor_data)))
-                        .unwrap())
+                    // Call the ping handler if set (to create chat)
+                    let handler_guard = ping_handler.lock().await;
+                    if let Some(handler) = handler_guard.as_ref() {
+                        handler(ping_req.from_uid.clone());
+                    } else {
+                        warn!("No ping handler set");
+                    }
+                    drop(handler_guard);
+
+                    // Get local UID for response
+                    let uid_guard = local_uid.lock().await;
+                    let uid = uid_guard.as_ref().map(|s| s.clone()).unwrap_or_else(|| "unknown".to_string());
+                    drop(uid_guard);
+
+                    // Create ping response
+                    let response = PingResponse {
+                        uid,
+                        status: "ok".to_string(),
+                    };
+
+                    // Serialize to CBOR
+                    match serde_cbor::to_vec(&response) {
+                        Ok(cbor_data) => {
+                            info!("Responding to ping from {}", ping_req.from_uid);
+                            Ok(Response::builder()
+                                .status(StatusCode::OK)
+                                .header("Content-Type", "application/cbor")
+                                .body(Full::new(Bytes::from(cbor_data)))
+                                .unwrap())
+                        }
+                        Err(e) => {
+                            error!("Failed to serialize ping response: {}", e);
+                            Ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Full::new(Bytes::from(format!(
+                                    "Failed to serialize response: {}",
+                                    e
+                                ))))
+                                .unwrap())
+                        }
+                    }
                 }
                 Err(e) => {
-                    error!("Failed to serialize ping response: {}", e);
+                    error!("Failed to deserialize ping request: {}", e);
                     Ok(Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .status(StatusCode::BAD_REQUEST)
                         .body(Full::new(Bytes::from(format!(
-                            "Failed to serialize response: {}",
+                            "Invalid ping format: {}",
                             e
                         ))))
                         .unwrap())

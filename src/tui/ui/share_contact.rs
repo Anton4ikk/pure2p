@@ -22,8 +22,9 @@ pub fn render_share_contact(f: &mut Frame, app: &App) {
             .margin(2)
             .constraints([
                 Constraint::Length(3),  // Title
+                Constraint::Length(3),  // UID and Port info
                 Constraint::Length(3),  // Expiry info
-                Constraint::Min(5),     // Token display
+                Constraint::Min(3),     // Token display (reduced from 5 to 3)
                 Constraint::Length(3),  // Status message
                 Constraint::Length(3),  // Help text
             ])
@@ -40,7 +41,21 @@ pub fn render_share_contact(f: &mut Frame, app: &App) {
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, chunks[0]);
 
-        // Expiry info
+        // UID, Port and Expiry info (combined into one block)
+        let info_text = format!(
+            "UID: {}... | Port: {} | Expires in {}",
+            &app.keypair.uid.to_string()[..8],
+            app.local_port,
+            format_duration_until(screen.expiry)
+        );
+        let info_widget = Paragraph::new(info_text)
+            .style(Style::default().fg(Color::Gray))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title("Your Identity"));
+        f.render_widget(info_widget, chunks[1]);
+
+        // Spacer for expiry (reuse chunk[2] if needed, or skip)
+        // Keeping the expiry block for backward compatibility
         let expiry_text = format!(
             "Expires: {} ({})",
             screen.expiry.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -50,7 +65,7 @@ pub fn render_share_contact(f: &mut Frame, app: &App) {
             .style(Style::default().fg(Color::Yellow))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).title("Expiry"));
-        f.render_widget(expiry_widget, chunks[1]);
+        f.render_widget(expiry_widget, chunks[2]);
 
         // Token display (wrapped and scrollable if needed)
         let token_text = Text::from(screen.token.clone());
@@ -62,7 +77,7 @@ pub fn render_share_contact(f: &mut Frame, app: &App) {
                     .borders(Borders::ALL)
                     .title("Contact Token"),
             );
-        f.render_widget(token_widget, chunks[2]);
+        f.render_widget(token_widget, chunks[3]);
 
         // Status message
         let status_text = screen
@@ -79,15 +94,15 @@ pub fn render_share_contact(f: &mut Frame, app: &App) {
             .style(Style::default().fg(status_color))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).title("Status"));
-        f.render_widget(status_widget, chunks[3]);
+        f.render_widget(status_widget, chunks[4]);
 
         // Help text
-        let help_text = "c: Copy to Clipboard | s: Save to File | b/Esc: Back to Menu | q: Quit";
+        let help_text = "c: Copy to Clipboard | s: Save to File | Esc: Back to Menu";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
-        f.render_widget(help, chunks[4]);
+        f.render_widget(help, chunks[5]);
     }
 }
 

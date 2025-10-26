@@ -6,14 +6,13 @@ use rusqlite::params;
 
 /// Helper to create a test message
 fn create_test_message(id: &str, sender: &str, recipient: &str) -> Message {
-    Message {
-        id: id.to_string(),
-        sender: sender.to_string(),
-        recipient: recipient.to_string(),
-        content: vec![1, 2, 3, 4],
-        timestamp: Utc::now().timestamp_millis(),
-        delivered: false,
-    }
+    Message::new(
+        id.to_string(),
+        sender.to_string(),
+        recipient.to_string(),
+        vec![1, 2, 3, 4],
+        Utc::now().timestamp_millis(),
+    )
 }
 
 #[test]

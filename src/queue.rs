@@ -236,14 +236,13 @@ impl MessageQueue {
                 .unwrap_or(Priority::Normal);
 
             Ok(QueuedMessage {
-                message: Message {
-                    id: row.get(0)?,
-                    sender: row.get(1)?,
-                    recipient: row.get(2)?,
-                    content: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    delivered: false,
-                },
+                message: Message::new(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ),
                 priority,
                 attempts: row.get(6)?,
                 next_retry: row.get(7)?,
@@ -275,14 +274,13 @@ impl MessageQueue {
                 .unwrap_or(Priority::Normal);
 
             Ok(QueuedMessage {
-                message: Message {
-                    id: row.get(0)?,
-                    sender: row.get(1)?,
-                    recipient: row.get(2)?,
-                    content: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    delivered: false,
-                },
+                message: Message::new(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ),
                 priority,
                 attempts: row.get(6)?,
                 next_retry: row.get(7)?,
@@ -418,6 +416,11 @@ impl MessageQueue {
         Ok(count)
     }
 
+    /// Get count of pending messages (alias for size, for clarity in UI)
+    pub fn count_pending(&self) -> Result<usize> {
+        self.size()
+    }
+
     /// Clear all messages from the queue
     pub fn clear(&mut self) -> Result<()> {
         self.conn.execute("DELETE FROM message_queue", [])?;
@@ -438,14 +441,13 @@ impl MessageQueue {
                 .unwrap_or(Priority::Normal);
 
             Ok(QueuedMessage {
-                message: Message {
-                    id: row.get(0)?,
-                    sender: row.get(1)?,
-                    recipient: row.get(2)?,
-                    content: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    delivered: false,
-                },
+                message: Message::new(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ),
                 priority,
                 attempts: row.get(6)?,
                 next_retry: row.get(7)?,

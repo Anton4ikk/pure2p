@@ -23,12 +23,12 @@ fn test_share_contact_screen_creation() {
         "Expiry should be in the future"
     );
 
-    // Verify default expiry is approximately 30 days
+    // Verify default expiry is approximately 1 day
     let expiry_duration = screen.expiry.signed_duration_since(Utc::now());
     assert!(
-        expiry_duration.num_days() >= 29 && expiry_duration.num_days() <= 30,
-        "Default expiry should be approximately 30 days, got {} days",
-        expiry_duration.num_days()
+        expiry_duration.num_hours() >= 23 && expiry_duration.num_hours() <= 24,
+        "Default expiry should be approximately 1 day (24 hours), got {} hours",
+        expiry_duration.num_hours()
     );
 
     // Verify no initial status message

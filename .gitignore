@@ -111,3 +111,7 @@ core
 .project
 .classpath
 .settings/
+
+# Temp files
+temp.md
+app_state.json

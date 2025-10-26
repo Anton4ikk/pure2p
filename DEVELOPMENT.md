@@ -20,6 +20,9 @@ cargo build --release
 # Test and run
 cargo test
 cargo run --bin pure2p-tui
+
+# Clean build folder
+cargo clean
 ```
 
 ---
@@ -45,9 +48,17 @@ src/
 ├── crypto.rs           # Ed25519 (signing), X25519 (key exchange), UIDs, ECDH
 ├── protocol.rs         # CBOR/JSON envelopes
 ├── transport.rs        # HTTP server/client
-├── storage.rs          # Contacts, chats, AppState
 ├── queue.rs            # SQLite retry queue
 ├── messaging.rs        # High-level API
+├── storage/            # Persistent data (modular)
+│   ├── mod.rs          # Public API, re-exports
+│   ├── contact.rs      # Contact struct, signed token generation/verification
+│   ├── message.rs      # Message struct, delivery status tracking
+│   ├── chat.rs         # Chat conversation management
+│   ├── settings.rs     # Settings struct
+│   ├── settings_manager.rs # Thread-safe SettingsManager (Arc<RwLock>)
+│   ├── app_state.rs    # AppState persistence (JSON) - single file database
+│   └── storage_db.rs   # Low-level SQLite storage (unimplemented)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
 │   ├── types.rs        # Common types (PortMappingResult, MappingError, etc.)
@@ -63,8 +74,8 @@ src/
 │   ├── mod.rs          # Module exports
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
-│   ├── app.rs          # App business logic
-│   └── ui/             # Modular rendering (10 files)
+│   ├── app.rs          # App business logic with automatic background connectivity
+│   └── ui/             # Modular rendering (9 files - consent screen removed)
 │       ├── mod.rs      # Main ui() dispatcher
 │       ├── startup_sync.rs
 │       ├── main_menu.rs
@@ -75,7 +86,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (301 tests)
+├── tests/              # Unit tests (373 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -84,17 +95,17 @@ src/
 │   ├── messaging_tests.rs
 │   ├── connectivity_tests.rs  # Includes CGNAT detection
 │   ├── lib_tests.rs
-│   ├── storage_tests/  # Storage module tests (51 tests)
+│   ├── storage_tests/  # Storage module tests (56 tests)
 │   │   ├── mod.rs
 │   │   ├── contact_tests.rs
 │   │   ├── token_tests.rs
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (125 tests)
+│   └── tui_tests/      # TUI module tests (122 tests)
 │       ├── mod.rs
 │       ├── app_tests.rs
-│       ├── screen_tests/     # Modularized screen tests (82 tests)
+│       ├── screen_tests/     # Modularized screen tests (75 tests - consent removed)
 │       │   ├── mod.rs
 │       │   ├── share_contact_tests.rs
 │       │   ├── import_contact_tests.rs
@@ -107,7 +118,7 @@ src/
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
-    └── tui.rs          # TUI binary (thin wrapper)
+    └── tui.rs          # TUI binary (thin wrapper, starts transport server, triggers auto-connectivity)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.
@@ -123,7 +134,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (305 total)
+cargo test                     # All tests (373 total)
 
 # Quality
 cargo fmt                      # Format
@@ -165,27 +176,27 @@ git push origin feature/name
 
 ```
 src/tests/
-├── crypto_tests.rs       (11 tests)  - Keypair, signing, UID, X25519 ECDH
-├── protocol_tests.rs     (10 tests)  - Envelopes, serialization
+├── crypto_tests.rs       (27 tests)  - Keypair, signing, UID, X25519 ECDH, AEAD encryption, token signing
+├── protocol_tests.rs     (25 tests)  - Envelopes, serialization, E2E encryption
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
 ├── lib_tests.rs          (1 test)    - Library init
-├── storage_tests/        (51 tests)  - Organized by functionality
+├── storage_tests/        (56 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
-│   ├── token_tests.rs    (8 tests)   - Token generation/parsing, validation
+│   ├── token_tests.rs    (16 tests)  - Token generation/parsing, signature verification
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
-│   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (125 tests) - Organized by TUI components
-    ├── app_tests.rs      (36 tests)  - App business logic
-    ├── screen_tests/     (82 tests)  - Modularized by screen type
+│   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
+└── tui_tests/            (122 tests) - Organized by TUI components
+    ├── app_tests.rs      (35 tests)  - App business logic, self-import prevention
+    ├── screen_tests/     (76 tests)  - Modularized by screen type
     │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
     │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
     │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen
     │   ├── chat_view_tests.rs        (3 tests)   - ChatViewScreen
-    │   ├── settings_tests.rs         (9 tests)   - SettingsScreen
+    │   ├── settings_tests.rs         (10 tests)  - SettingsScreen
     │   ├── startup_sync_tests.rs     (10 tests)  - StartupSyncScreen
     │   ├── diagnostics_tests.rs      (20 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT)
     │   └── status_indicators_tests.rs (10 tests) - Status badges and contact expiry
@@ -273,8 +284,15 @@ sudo apt-get install pkg-config libssl-dev
 
 **Must maintain:**
 - Direct P2P only (no servers/relays)
-- Local-only storage
+- Local-only storage (single `app_state.json` file in project root)
 - Transparency about limitations
+
+**Note on app_state.json:**
+- Created automatically on first run with default settings
+- Stores all application data (contacts, chats, messages, settings)
+- Auto-saved after every state change
+- Tests use isolated temp directories to avoid polluting production data
+- Safe to delete for full reset (will recreate with defaults)
 
 See [ROADMAP.md](ROADMAP.md#-contributing) for details.
 

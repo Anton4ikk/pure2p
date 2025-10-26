@@ -3,7 +3,7 @@
 use arboard::Clipboard;
 use chrono::{DateTime, Duration, Utc};
 use crate::crypto::KeyPair;
-use crate::storage::{generate_contact_token, parse_contact_token, Contact, Settings};
+use crate::storage::{generate_contact_token, parse_contact_token, Contact};
 use std::fs;
 
 /// Share Contact screen state
@@ -20,8 +20,8 @@ pub struct ShareContactScreen {
 impl ShareContactScreen {
     /// Create new share contact screen
     pub fn new(keypair: &KeyPair, local_ip: &str) -> Self {
-        // Default: 30 days expiry
-        let expiry = Utc::now() + Duration::days(30);
+        // Default: 1 day expiry
+        let expiry = Utc::now() + Duration::days(1);
         let token = generate_contact_token(
             local_ip,
             &keypair.public_key,
@@ -292,28 +292,22 @@ pub struct SettingsScreen {
     pub status_message: Option<String>,
     /// Whether status is an error
     pub is_error: bool,
-    /// Settings path for saving
-    pub settings_path: String,
 }
 
 impl SettingsScreen {
     /// Create new settings screen
-    pub fn new(settings_path: String) -> Self {
-        // Load current settings to populate defaults
-        let settings = Settings::load(&settings_path).unwrap_or_default();
-
+    pub fn new(current_retry_interval: u32) -> Self {
         Self {
-            retry_interval_input: settings.retry_interval_minutes.to_string(),
+            retry_interval_input: current_retry_interval.to_string(),
             selected_field: 0,
             status_message: Some("Edit retry interval and press Enter to save".to_string()),
             is_error: false,
-            settings_path,
         }
     }
 
-    /// Add character to input (only digits)
+    /// Add character to input (only digits, max 4 characters)
     pub fn add_char(&mut self, c: char) {
-        if c.is_ascii_digit() {
+        if c.is_ascii_digit() && self.retry_interval_input.len() < 4 {
             self.retry_interval_input.push(c);
         }
     }
@@ -328,60 +322,43 @@ impl SettingsScreen {
         self.retry_interval_input.clear();
     }
 
-    /// Validate and save settings
-    pub fn validate_and_save(&mut self) -> bool {
+    /// Validate input and return the validated value
+    /// Returns Some(minutes) if valid, None if invalid
+    pub fn validate(&mut self) -> Option<u32> {
         if self.retry_interval_input.is_empty() {
             self.status_message = Some("Error: Retry interval cannot be empty".to_string());
             self.is_error = true;
-            return false;
+            return None;
         }
 
         match self.retry_interval_input.parse::<u32>() {
             Ok(minutes) if minutes > 0 && minutes <= 1440 => {
                 // Valid range: 1 minute to 24 hours (1440 minutes)
-                match self.save_settings(minutes) {
-                    Ok(_) => {
-                        self.status_message = Some(format!("✓ Saved! Retry interval set to {} minutes", minutes));
-                        self.is_error = false;
-                        true
-                    }
-                    Err(e) => {
-                        self.status_message = Some(format!("Error saving: {}", e));
-                        self.is_error = true;
-                        false
-                    }
-                }
+                self.is_error = false;
+                Some(minutes)
             }
             Ok(minutes) if minutes == 0 => {
                 self.status_message = Some("Error: Retry interval must be at least 1 minute".to_string());
                 self.is_error = true;
-                false
+                None
             }
             Ok(_) => {
                 self.status_message = Some("Error: Retry interval cannot exceed 1440 minutes (24 hours)".to_string());
                 self.is_error = true;
-                false
+                None
             }
             Err(_) => {
                 self.status_message = Some("Error: Invalid number".to_string());
                 self.is_error = true;
-                false
+                None
             }
         }
     }
 
-    fn save_settings(&mut self, retry_interval_minutes: u32) -> Result<(), Box<dyn std::error::Error>> {
-        // Load existing settings
-        let mut settings = Settings::load(&self.settings_path)?;
-
-        // Update retry interval
-        settings.retry_interval_minutes = retry_interval_minutes;
-        settings.global_retry_interval_ms = (retry_interval_minutes as u64) * 60 * 1000;
-
-        // Save settings
-        settings.save(&self.settings_path)?;
-
-        Ok(())
+    /// Set success message after saving
+    pub fn set_saved_message(&mut self, minutes: u32) {
+        self.status_message = Some(format!("✓ Saved! Retry interval set to {} minutes", minutes));
+        self.is_error = false;
     }
 }
 

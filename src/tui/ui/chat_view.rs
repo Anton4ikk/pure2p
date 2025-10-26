@@ -76,7 +76,8 @@ pub fn render_chat_view(f: &mut Frame, app: &App) {
                         let content = String::from_utf8(msg.content.clone())
                             .unwrap_or_else(|_| "[binary data]".to_string());
 
-                        Line::from(vec![
+                        // Build delivery status indicator (only for outgoing messages)
+                        let mut spans = vec![
                             Span::styled(
                                 format!("[{}] ", timestamp),
                                 Style::default().fg(Color::DarkGray),
@@ -86,7 +87,33 @@ pub fn render_chat_view(f: &mut Frame, app: &App) {
                                 Style::default().fg(sender_color).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(content, Style::default().fg(Color::White)),
-                        ])
+                        ];
+
+                        // Add delivery status for outgoing messages
+                        if is_from_me {
+                            let (status_text, status_color) = match msg.delivery_status {
+                                crate::storage::DeliveryStatus::Sent => {
+                                    (" ✓ sent".to_string(), Color::Gray)
+                                }
+                                crate::storage::DeliveryStatus::Delivered => {
+                                    (" ✓✓ delivered".to_string(), Color::Green)
+                                }
+                                crate::storage::DeliveryStatus::Pending => {
+                                    let status = format!(" ↻ {}", msg.status_text());
+                                    (status, Color::Yellow)
+                                }
+                                crate::storage::DeliveryStatus::Failed => {
+                                    (" ✗ failed".to_string(), Color::Red)
+                                }
+                            };
+
+                            spans.push(Span::styled(
+                                status_text,
+                                Style::default().fg(status_color),
+                            ));
+                        }
+
+                        Line::from(spans)
                     })
                     .collect();
 

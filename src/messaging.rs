@@ -48,14 +48,13 @@ use chrono::Utc;
 ///     Utc::now() + Duration::days(30),
 /// );
 ///
-/// let message = Message {
-///     id: "msg_123".to_string(),
-///     sender: "my_uid".to_string(),
-///     recipient: "alice_uid".to_string(),
-///     content: b"Hello, Alice!".to_vec(),
-///     timestamp: Utc::now().timestamp_millis(),
-///     delivered: false,
-/// };
+/// let message = Message::new(
+///     "msg_123".to_string(),
+///     "my_uid".to_string(),
+///     "alice_uid".to_string(),
+///     b"Hello, Alice!".to_vec(),
+///     Utc::now().timestamp_millis(),
+/// );
 ///
 /// let delivered = send_message(&transport, &mut queue, &contact, &message, Priority::Normal).await?;
 ///
@@ -216,14 +215,13 @@ pub async fn send_delete_chat(
     // Create a delete message with empty payload
     // Use timestamp + recipient UID to ensure uniqueness
     let timestamp = Utc::now().timestamp_millis();
-    let message = Message {
-        id: format!("delete_chat_{}_{}", contact.uid, timestamp),
-        sender: local_uid.to_string(),
-        recipient: contact.uid.clone(),
-        content: vec![],
+    let message = Message::new(
+        format!("delete_chat_{}_{}", contact.uid, timestamp),
+        local_uid.to_string(),
+        contact.uid.clone(),
+        vec![],
         timestamp,
-        delivered: false,
-    };
+    );
 
     // Send with "delete_chat" message type and urgent priority
     send_message_with_type(
@@ -320,14 +318,15 @@ pub fn handle_incoming_message(
     let chat = app_state.get_or_create_chat(sender_uid);
 
     // Create message object
-    let message = Message {
-        id: message_id.to_string(),
-        sender: sender_uid.to_string(),
-        recipient: recipient_uid.to_string(),
+    let mut message = Message::new(
+        message_id.to_string(),
+        sender_uid.to_string(),
+        recipient_uid.to_string(),
         content,
         timestamp,
-        delivered: true, // Incoming messages are already delivered to us
-    };
+    );
+    // Incoming messages are already delivered to us
+    message.mark_delivered();
 
     // Append message to chat history
     chat.append_message(message);
