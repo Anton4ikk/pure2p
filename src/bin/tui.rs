@@ -31,6 +31,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run main loop
     let res = run_app(&mut terminal, &mut app);
 
+    // Save application state before exit
+    if let Err(e) = app.save_state() {
+        eprintln!("Warning: Failed to save application state: {}", e);
+    }
+
     // Restore terminal
     disable_raw_mode()?;
     execute!(
@@ -159,8 +164,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                             KeyCode::Enter => {
+                                // Parse token first
                                 if let Some(screen) = &mut app.import_contact_screen {
                                     screen.parse_token();
+                                }
+                                // Then get contact and import (separate scope to avoid double borrow)
+                                let contact_to_import = app.import_contact_screen.as_ref()
+                                    .and_then(|screen| screen.get_contact().cloned());
+                                if let Some(contact) = contact_to_import {
+                                    app.import_contact(contact);
                                 }
                             }
                             KeyCode::Char('v') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
@@ -271,8 +283,22 @@ fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                             KeyCode::Enter => {
-                                if let Some(screen) = &mut app.settings_screen {
-                                    screen.validate_and_save();
+                                // Validate input first
+                                let validated_minutes = app.settings_screen.as_mut()
+                                    .and_then(|screen| screen.validate());
+
+                                // If valid, update app_state and save
+                                if let Some(minutes) = validated_minutes {
+                                    app.app_state.settings.retry_interval_minutes = minutes;
+                                    app.app_state.settings.global_retry_interval_ms = (minutes as u64) * 60 * 1000;
+
+                                    // Save app state
+                                    let _ = app.save_state();
+
+                                    // Update screen with success message
+                                    if let Some(screen) = &mut app.settings_screen {
+                                        screen.set_saved_message(minutes);
+                                    }
                                 }
                             }
                             KeyCode::Delete => {

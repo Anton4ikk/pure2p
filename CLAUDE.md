@@ -39,9 +39,9 @@ cargo fmt
 - `contact.rs` - Contact struct and signed token generation/verification (base64 CBOR + Ed25519 signature)
 - `message.rs` - Message struct and delivery status tracking
 - `chat.rs` - Chat conversation management
-- `settings.rs` - Application settings with auto-save (JSON)
+- `settings.rs` - Application settings struct
 - `settings_manager.rs` - Thread-safe settings access for UI
-- `app_state.rs` - AppState persistence (JSON/CBOR)
+- `app_state.rs` - AppState persistence (JSON/CBOR) - single file database for all data (contacts, chats, messages, settings)
 - `storage_db.rs` - Low-level SQLite storage (unimplemented)
 - `mod.rs` - Public API with re-exports
 
@@ -72,17 +72,22 @@ cargo fmt
 
 **Chat** - `contact_uid`, `messages[]`, `is_active`, `has_pending_messages`. Methods: `append_message()`, `mark_unread()`, `mark_has_pending()`
 
-**AppState** - `contacts[]`, `chats[]`, `message_queue[]`, `settings`. Methods: `get_chat()`, `sync_pending_status()`, `save()`/`load()`
+**AppState** - `user_keypair`, `user_ip`, `user_port`, `contacts[]`, `chats[]`, `message_queue[]`, `settings`. Methods: `get_chat()`, `sync_pending_status()`, `save()`/`load()`. **Single source of truth**: All app data persisted in `app_state.json`, loaded on startup, auto-saved on all state changes (import contact, send message, delete chat, change settings, connectivity detected).
 
-**Settings** - Retry intervals, storage path, contact expiry, max retries. Auto-save to JSON. Thread-safe SettingsManager for UI.
+**User Identity** - Ed25519 + X25519 keypair generated once on first run, stored in `app_state.json`. UID remains constant across restarts. Contacts can reliably message you back.
 
-**App (TUI)** - Main application state with automatic connectivity:
+**Settings** - Retry intervals, storage path, contact expiry, max retries. Stored within AppState.
+
+**App (TUI)** - Main application state with automatic connectivity and persistence:
+- `app_state` - Loaded from `app_state.json` on startup, saved on exit and after changes
+- `state_path` - Path to state file (default: `app_state.json`, tests use temp dirs)
 - `connectivity_result` - Stores startup/latest connectivity test results
 - `local_ip` - Automatically updated from connectivity results (external IP:port)
 - `local_port` - Port for listening and connectivity tests (default: 8080)
 - `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
-- Startup: Automatically runs `establish_connectivity()` in background on launch
+- Startup: Loads all data from `app_state.json`, runs `establish_connectivity()` in background
 - ShareContact: Uses detected external IP for accurate contact tokens
+- Persistence: Auto-saves state after import/send/delete/settings operations
 
 ## TUI Architecture
 
@@ -114,13 +119,13 @@ cargo fmt
 
 **Screens:**
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time), automatic on startup if messages pending
-2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n)
+2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n), shows yellow warning during connectivity setup, shows red error block if all connectivity attempts fail
 3. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), expiry countdown
 4. **ImportContact** - Parse/validate tokens, expiry check, signature verification
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
-7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
-8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection, manual refresh (r/F5) triggers background async tests
+7. **Settings** - Edit retry interval (1-1440 min, 4-digit max input), auto-save with toast
+8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection, manual refresh (r/F5) triggers background async tests, smart color logic: failed attempts shown in yellow (warning) if any protocol succeeded, red (error) if all failed
 
 **Keyboard:**
 - Global: q/Esc=back/quit, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
@@ -166,9 +171,9 @@ cargo fmt
 - `contact.rs` - Contact struct with token generation/parsing
 - `message.rs` - Message struct with delivery status (Sent, Delivered, Pending, Failed)
 - `chat.rs` - Chat conversation management
-- `settings.rs` - Settings struct with JSON persistence
+- `settings.rs` - Settings struct
 - `settings_manager.rs` - Thread-safe SettingsManager (Arc<RwLock<Settings>>)
-- `app_state.rs` - AppState struct with save/load (JSON/CBOR)
+- `app_state.rs` - AppState struct with save/load (JSON/CBOR) - **single file database**
 - `storage_db.rs` - Low-level SQLite Storage (unimplemented)
 - `mod.rs` - Public API with re-exports
 
@@ -177,9 +182,25 @@ cargo fmt
 - Signature verified on import, rejects tampered/forged tokens
 - Contact struct stores both pubkeys for dual-purpose: identity (Ed25519) and encryption (X25519)
 
-**Settings & AppState**:
-- Settings: JSON file, auto-create parent dirs, thread-safe access via SettingsManager
+**Persistence (app_state.json)**:
+- **Single file database**: All data (user identity, network info, contacts, chats, messages, settings) in one JSON file
+- **User Identity**: Keypair generated on first run, persisted forever. UID never changes.
+- **Network Info**: Detected external IP/port saved after connectivity diagnostics
+- **Created on first run**: File created immediately with:
+  - Generated keypair (your permanent identity)
+  - Default settings
+  - Empty contacts/chats lists
+- **Auto-save**: State saved automatically after any data modification:
+  - Import contact → save
+  - Send message → save
+  - Delete chat → save
+  - Change settings → save
+  - Connectivity detected → save (IP/port)
+  - App exit → save
+- **Auto-load**: Full state loaded on app startup (keypair, IP, contacts, chats, etc.)
+- **Test isolation**: Tests use temp directories to avoid polluting user data
 - AppState: JSON/CBOR serialization, sync_pending_status() updates chat flags
+- **Location**: Project root (`./app_state.json`) for production, temp dirs for tests
 
 ### Messaging
 - `send_message()` → auto-queue on fail
@@ -227,7 +248,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (294 total tests
+- All tests in `src/tests/` directory (295 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -248,14 +269,14 @@ cargo fmt
 - `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
 - `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
-**`tui_tests/` (118 tests):**
+**`tui_tests/` (119 tests):**
 - `app_tests.rs` (32 tests) - App struct and business logic
-- `screen_tests/` (75 tests) - All screens, modularized by screen type (consent screen removed):
+- `screen_tests/` (76 tests) - All screens, modularized by screen type (consent screen removed):
   - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
   - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)
   - `chat_list_tests.rs` (5 tests) - ChatListScreen (navigation, delete popup)
   - `chat_view_tests.rs` (3 tests) - ChatViewScreen (input, scrolling)
-  - `settings_tests.rs` (9 tests) - SettingsScreen (validation, persistence)
+  - `settings_tests.rs` (10 tests) - SettingsScreen (validation, persistence, 4-digit max length)
   - `startup_sync_tests.rs` (10 tests) - StartupSyncScreen (progress tracking)
   - `diagnostics_tests.rs` (20 tests) - DiagnosticsScreen (IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size, CGNAT)
   - `status_indicators_tests.rs` (10 tests) - Status badges and contact expiry

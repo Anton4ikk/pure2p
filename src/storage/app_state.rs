@@ -1,6 +1,7 @@
 //! Application state persistence and management
 
 use crate::{
+    crypto::KeyPair,
     storage::{chat::Chat, contact::Contact, settings::Settings},
     Error, Result,
 };
@@ -10,6 +11,12 @@ use std::path::Path;
 /// Persistent application state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
+    /// User's cryptographic identity (keypair + UID)
+    pub user_keypair: Option<KeyPair>,
+    /// User's detected external IP address
+    pub user_ip: Option<String>,
+    /// User's listening port
+    pub user_port: u16,
     /// List of contacts
     pub contacts: Vec<Contact>,
     /// List of chat conversations
@@ -24,6 +31,9 @@ impl AppState {
     /// Create a new empty application state
     pub fn new() -> Self {
         Self {
+            user_keypair: None, // Will be generated on first run
+            user_ip: None,      // Will be detected by connectivity diagnostics
+            user_port: 8080,    // Default port
             contacts: Vec::new(),
             chats: Vec::new(),
             message_queue: Vec::new(),

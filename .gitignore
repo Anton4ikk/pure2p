@@ -114,4 +114,4 @@ core
 
 # Temp files
 temp.md
-settings.json
+app_state.json

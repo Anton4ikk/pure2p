@@ -52,9 +52,9 @@ src/
 │   ├── contact.rs      # Contact struct, signed token generation/verification
 │   ├── message.rs      # Message struct, delivery status tracking
 │   ├── chat.rs         # Chat conversation management
-│   ├── settings.rs     # Settings struct with JSON persistence
+│   ├── settings.rs     # Settings struct
 │   ├── settings_manager.rs # Thread-safe SettingsManager (Arc<RwLock>)
-│   ├── app_state.rs    # AppState persistence (JSON/CBOR)
+│   ├── app_state.rs    # AppState persistence (JSON) - single file database
 │   └── storage_db.rs   # Low-level SQLite storage (unimplemented)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
@@ -281,8 +281,15 @@ sudo apt-get install pkg-config libssl-dev
 
 **Must maintain:**
 - Direct P2P only (no servers/relays)
-- Local-only storage
+- Local-only storage (single `app_state.json` file in project root)
 - Transparency about limitations
+
+**Note on app_state.json:**
+- Created automatically on first run with default settings
+- Stores all application data (contacts, chats, messages, settings)
+- Auto-saved after every state change
+- Tests use isolated temp directories to avoid polluting production data
+- Safe to delete for full reset (will recreate with defaults)
 
 See [ROADMAP.md](ROADMAP.md#-contributing) for details.
 

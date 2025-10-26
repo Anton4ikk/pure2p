@@ -42,36 +42,43 @@ pub struct App {
     pub connectivity_result: Option<crate::connectivity::ConnectivityResult>,
     /// Local port for connectivity
     pub local_port: u16,
+    /// Path to app state file
+    state_path: String,
 }
 
 impl App {
     /// Create new application
     ///
     /// # Arguments
-    /// * `settings_path` - Optional path to settings file. Defaults to "settings.json" if None.
-    ///                     Used primarily for testing to avoid polluting user's settings.
-    pub fn new_with_settings<P: AsRef<std::path::Path>>(settings_path: Option<P>) -> Result<Self, Box<dyn std::error::Error>> {
-        let keypair = KeyPair::generate()?;
-        let local_ip = Self::get_local_ip();
-
-        // Load or create settings
-        let settings_path = settings_path.as_ref()
+    /// * `state_path` - Optional path to app state file. Defaults to "app_state.json" if None.
+    ///                  Used primarily for testing to avoid polluting user's state.
+    pub fn new_with_settings<P: AsRef<std::path::Path>>(state_path: Option<P>) -> Result<Self, Box<dyn std::error::Error>> {
+        // Determine state file path
+        let state_path = state_path.as_ref()
             .map(|p| p.as_ref().to_string_lossy().to_string())
-            .unwrap_or_else(|| "settings.json".to_string());
+            .unwrap_or_else(|| "app_state.json".to_string());
 
-        let settings = if !std::path::Path::new(&settings_path).exists() {
-            // First run: create and save default settings
-            let default_settings = crate::storage::Settings::default();
-            let _ = default_settings.save(&settings_path); // Ignore save errors on first run
-            default_settings
+        // Check if this is first run (file doesn't exist)
+        let is_first_run = !std::path::Path::new(&state_path).exists();
+
+        // Load or create app state (contacts, chats, messages, settings - everything!)
+        let mut app_state = AppState::load(&state_path).unwrap_or_else(|_| {
+            AppState::new() // Will have default settings
+        });
+
+        // Load or generate user keypair (persistent identity)
+        let keypair = if let Some(existing_keypair) = &app_state.user_keypair {
+            existing_keypair.clone()
         } else {
-            // Load existing settings, fall back to defaults on error
-            crate::storage::Settings::load(&settings_path).unwrap_or_default()
+            // First run: generate new identity
+            let new_keypair = KeyPair::generate()?;
+            app_state.user_keypair = Some(new_keypair.clone());
+            new_keypair
         };
 
-        // Create app state with loaded settings
-        let mut app_state = AppState::new();
-        app_state.settings = settings;
+        // Load or use default network info
+        let local_ip = app_state.user_ip.clone().unwrap_or_else(Self::get_local_ip);
+        let local_port = app_state.user_port;
 
         // Simulate checking for pending messages
         // In a real implementation, this would query the MessageQueue
@@ -86,9 +93,7 @@ impl App {
             (Screen::MainMenu, None)
         };
 
-        let local_port = 8080; // Default port
-
-        Ok(Self {
+        let app = Self {
             current_screen,
             selected_index: 0,
             menu_items: MenuItem::all(),
@@ -106,15 +111,31 @@ impl App {
             diagnostics_refresh_handle: None,
             connectivity_result: None,
             local_port,
-        })
+            state_path,
+        };
+
+        // Save initial state on first run
+        if is_first_run {
+            let _ = app.save_state();
+        }
+
+        Ok(app)
     }
 
-    /// Create new application with default settings path
+    /// Create new application with default state path
     ///
     /// This is a convenience wrapper around `new_with_settings(None)`.
-    /// For production use, settings will be stored in "settings.json" in the project root.
+    /// For production use, all data will be stored in "app_state.json" in the project root.
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Self::new_with_settings(None::<&str>)
+    }
+
+    /// Save application state to disk
+    ///
+    /// Persists contacts, chats, and messages to app_state.json
+    pub fn save_state(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.app_state.save(&self.state_path)?;
+        Ok(())
     }
 
     /// Trigger startup connectivity diagnostics (non-blocking)
@@ -149,7 +170,12 @@ impl App {
                     Ok(result) => {
                         // Update local_ip from the mapping result
                         if let Some(mapping) = &result.mapping {
-                            self.local_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                            let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                            self.local_ip = detected_ip.clone();
+
+                            // Save detected IP to app_state for persistence
+                            self.app_state.user_ip = Some(detected_ip);
+                            let _ = self.save_state();
                         }
                         self.connectivity_result = Some(result.clone());
 
@@ -234,7 +260,8 @@ impl App {
 
     /// Show settings screen
     pub fn show_settings_screen(&mut self) {
-        self.settings_screen = Some(SettingsScreen::new("settings.json".to_string()));
+        let current_interval = self.app_state.settings.retry_interval_minutes;
+        self.settings_screen = Some(SettingsScreen::new(current_interval));
         self.current_screen = Screen::Settings;
     }
 
@@ -340,7 +367,12 @@ impl App {
                     Ok(result) => {
                         // Update local_ip from the mapping result
                         if let Some(mapping) = &result.mapping {
-                            self.local_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                            let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                            self.local_ip = detected_ip.clone();
+
+                            // Save detected IP to app_state for persistence
+                            self.app_state.user_ip = Some(detected_ip);
+                            let _ = self.save_state();
                         }
                         self.connectivity_result = Some(result.clone());
                         self.apply_connectivity_result(result);
@@ -459,6 +491,9 @@ impl App {
                     }
                 }
 
+                // Auto-save after deleting chat
+                let _ = self.save_state();
+
                 // TODO: Actually send delete request via transport if chat was active
                 // For now, we just delete locally
             }
@@ -469,6 +504,30 @@ impl App {
     pub fn cancel_delete_chat(&mut self) {
         if let Some(screen) = &mut self.chat_list_screen {
             screen.hide_delete_popup();
+        }
+    }
+
+    /// Import a contact (chat will be created when first message is sent/received)
+    pub fn import_contact(&mut self, contact: crate::storage::Contact) {
+        // Check if contact already exists
+        if !self.app_state.contacts.iter().any(|c| c.uid == contact.uid) {
+            // Add contact to list
+            self.app_state.contacts.push(contact.clone());
+
+            // Auto-save after importing contact
+            let _ = self.save_state();
+
+            // Update import screen status
+            if let Some(screen) = &mut self.import_contact_screen {
+                screen.status_message = Some(format!("✓ Contact imported and saved!"));
+                screen.is_error = false;
+            }
+        } else {
+            // Contact already exists
+            if let Some(screen) = &mut self.import_contact_screen {
+                screen.status_message = Some("Contact already exists".to_string());
+                screen.is_error = true;
+            }
         }
     }
 
@@ -496,6 +555,9 @@ impl App {
                 chat.append_message(message);
                 chat_view.clear_input();
                 chat_view.set_status("Message queued for sending".to_string());
+
+                // Auto-save after sending message
+                let _ = self.save_state();
 
                 // TODO: Actually send via transport layer
                 // For now, messages are just stored locally

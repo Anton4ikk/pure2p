@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use x25519_dalek::PublicKey as X25519PublicKey;
 
 /// Unique identifier derived from public key fingerprint
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct UID(String);
 
 impl UID {
@@ -49,7 +49,7 @@ impl std::fmt::Display for UID {
 }
 
 /// Represents a cryptographic key pair
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KeyPair {
     /// Ed25519 public key (for signing/verification)
     pub public_key: Vec<u8>,

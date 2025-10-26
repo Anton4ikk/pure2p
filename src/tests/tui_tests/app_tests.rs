@@ -1,7 +1,7 @@
 // App Tests - Testing App struct and its methods
 
 use crate::tui::{App, Screen, MenuItem};
-use crate::storage::Settings;
+use crate::storage::{AppState, Settings};
 use tempfile::TempDir;
 
 /// Helper to create an App with temporary settings file
@@ -17,9 +17,14 @@ fn create_test_app() -> (App, TempDir) {
 /// Helper to create an App with custom settings
 fn create_test_app_with_settings(settings: Settings) -> (App, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let settings_path = temp_dir.path().join("settings.json");
-    settings.save(&settings_path).expect("Failed to save settings");
-    let app = App::new_with_settings(Some(&settings_path))
+    let state_path = temp_dir.path().join("app_state.json");
+
+    // Create app state with custom settings
+    let mut app_state = AppState::new();
+    app_state.settings = settings;
+    app_state.save(&state_path).expect("Failed to save app state");
+
+    let app = App::new_with_settings(Some(&state_path))
         .expect("Failed to create app");
     (app, temp_dir)
 }
@@ -772,29 +777,27 @@ fn test_app_complete_startup_sync() {
 }
 
 #[test]
-fn test_app_creates_settings_on_first_run() {
+fn test_app_creates_state_on_first_run() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let settings_path = temp_dir.path().join("settings.json");
+    let state_path = temp_dir.path().join("app_state.json");
 
     // Verify file doesn't exist before test
-    assert!(!settings_path.exists(),
-        "settings.json should not exist before first run");
+    assert!(!state_path.exists(),
+        "app_state.json should not exist before first run");
 
-    // Create app (this should trigger settings.json creation)
-    let app = App::new_with_settings(Some(&settings_path))
+    // Create app (this should use default state)
+    let app = App::new_with_settings(Some(&state_path))
         .expect("Failed to create app");
 
-    // Verify settings file was created
-    assert!(settings_path.exists(),
-        "settings.json should be created on first run");
-
-    // Verify settings have default values
+    // App state should be initialized with defaults
     assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
         "Should have default retry interval");
     assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
         "Should have default contact expiry");
     assert_eq!(app.app_state.settings.max_message_retries, 5,
         "Should have default max retries");
+    assert!(app.app_state.contacts.is_empty(), "Should have no contacts");
+    assert!(app.app_state.chats.is_empty(), "Should have no chats");
 }
 
 #[test]
@@ -816,23 +819,25 @@ fn test_app_loads_existing_settings() {
 }
 
 #[test]
-fn test_app_falls_back_to_defaults_on_corrupt_settings() {
+fn test_app_falls_back_to_defaults_on_corrupt_state() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let settings_path = temp_dir.path().join("settings.json");
+    let state_path = temp_dir.path().join("app_state.json");
 
-    // Create a corrupted settings file
-    std::fs::write(&settings_path, "{ invalid json }")
-        .expect("Failed to write corrupt settings");
+    // Create a corrupted state file
+    std::fs::write(&state_path, "{ invalid json }")
+        .expect("Failed to write corrupt state");
 
     // Create app (should fall back to defaults)
-    let app = App::new_with_settings(Some(&settings_path))
+    let app = App::new_with_settings(Some(&state_path))
         .expect("Failed to create app");
 
-    // Verify default settings are used
+    // Verify default state is used
     assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
         "Should fall back to default retry interval");
     assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
         "Should fall back to default contact expiry");
+    assert!(app.app_state.contacts.is_empty(), "Should have no contacts");
+    assert!(app.app_state.chats.is_empty(), "Should have no chats");
 }
 
 #[test]
