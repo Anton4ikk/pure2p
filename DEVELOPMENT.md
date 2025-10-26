@@ -45,9 +45,17 @@ src/
 ├── crypto.rs           # Ed25519 (signing), X25519 (key exchange), UIDs, ECDH
 ├── protocol.rs         # CBOR/JSON envelopes
 ├── transport.rs        # HTTP server/client
-├── storage.rs          # Contacts, chats, AppState
 ├── queue.rs            # SQLite retry queue
 ├── messaging.rs        # High-level API
+├── storage/            # Persistent data (modular)
+│   ├── mod.rs          # Public API, re-exports
+│   ├── contact.rs      # Contact struct, signed token generation/verification
+│   ├── message.rs      # Message struct, delivery status tracking
+│   ├── chat.rs         # Chat conversation management
+│   ├── settings.rs     # Settings struct with JSON persistence
+│   ├── settings_manager.rs # Thread-safe SettingsManager (Arc<RwLock>)
+│   ├── app_state.rs    # AppState persistence (JSON/CBOR)
+│   └── storage_db.rs   # Low-level SQLite storage (unimplemented)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
 │   ├── types.rs        # Common types (PortMappingResult, MappingError, etc.)
@@ -123,7 +131,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (305 total)
+cargo test                     # All tests (301 total)
 
 # Quality
 cargo fmt                      # Format
@@ -172,9 +180,9 @@ src/tests/
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
 ├── lib_tests.rs          (1 test)    - Library init
-├── storage_tests/        (51 tests)  - Organized by functionality
+├── storage_tests/        (62 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
-│   ├── token_tests.rs    (8 tests)   - Token generation/parsing, validation
+│   ├── token_tests.rs    (16 tests)  - Token generation/parsing, signature verification
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
 │   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency

@@ -35,7 +35,15 @@ cargo fmt
 
 **`transport`** - HTTP/1.1 server with `/output`, `/ping`, `/message` endpoints. Peer management, delivery tracking.
 
-**`storage`** - Contact/Chat structures, signed contact token generation (base64 CBOR + Ed25519 signature), AppState persistence (JSON/CBOR), Settings with auto-save
+**`storage`** - Modular storage system for persistent data:
+- `contact.rs` - Contact struct and signed token generation/verification (base64 CBOR + Ed25519 signature)
+- `message.rs` - Message struct and delivery status tracking
+- `chat.rs` - Chat conversation management
+- `settings.rs` - Application settings with auto-save (JSON)
+- `settings_manager.rs` - Thread-safe settings access for UI
+- `app_state.rs` - AppState persistence (JSON/CBOR)
+- `storage_db.rs` - Low-level SQLite storage (unimplemented)
+- `mod.rs` - Public API with re-exports
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
 
@@ -142,11 +150,25 @@ cargo fmt
 - Auto-remove after max retries
 
 ### Storage
-- **Contact tokens**: Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
-- **Token security**: Signature verified on import, rejects tampered/forged tokens
-- Settings: JSON file, auto-create parent dirs
-- AppState: JSON/CBOR serialization
+
+**Module Architecture** (8 files, ~150-400 lines each):
+- `contact.rs` - Contact struct with token generation/parsing
+- `message.rs` - Message struct with delivery status (Sent, Delivered, Pending, Failed)
+- `chat.rs` - Chat conversation management
+- `settings.rs` - Settings struct with JSON persistence
+- `settings_manager.rs` - Thread-safe SettingsManager (Arc<RwLock<Settings>>)
+- `app_state.rs` - AppState struct with save/load (JSON/CBOR)
+- `storage_db.rs` - Low-level SQLite Storage (unimplemented)
+- `mod.rs` - Public API with re-exports
+
+**Contact Tokens**:
+- Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
+- Signature verified on import, rejects tampered/forged tokens
 - Contact struct stores both pubkeys for dual-purpose: identity (Ed25519) and encryption (X25519)
+
+**Settings & AppState**:
+- Settings: JSON file, auto-create parent dirs, thread-safe access via SettingsManager
+- AppState: JSON/CBOR serialization, sync_pending_status() updates chat flags
 
 ### Messaging
 - `send_message()` → auto-queue on fail

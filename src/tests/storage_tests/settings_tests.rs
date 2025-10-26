@@ -1,6 +1,6 @@
 // Settings Tests - Testing Settings and SettingsManager
 
-use crate::storage::{Settings, SettingsManager};
+use crate::storage::{MappingConsent, Settings, SettingsManager};
 use tempfile::NamedTempFile;
 
 // Settings Tests
@@ -434,4 +434,109 @@ async fn test_settings_manager_clone() {
 
     // Original sees the update
     assert_eq!(manager.get_storage_path().await, "/clone/path");
+}
+
+// Mapping Consent Tests
+
+#[test]
+fn test_mapping_consent_default() {
+    let settings = Settings::default();
+    assert_eq!(settings.mapping_consent, MappingConsent::NotAsked);
+}
+
+#[test]
+fn test_mapping_consent_should_ask() {
+    let mut settings = Settings::default();
+
+    // Default: should ask
+    assert!(settings.should_ask_consent());
+
+    // After setting to AlwaysAllow: should not ask
+    settings.mapping_consent = MappingConsent::AlwaysAllow;
+    assert!(!settings.should_ask_consent());
+
+    // After setting to Deny: should not ask
+    settings.mapping_consent = MappingConsent::Deny;
+    assert!(!settings.should_ask_consent());
+}
+
+#[test]
+fn test_mapping_consent_is_allowed() {
+    let mut settings = Settings::default();
+
+    // NotAsked: not allowed
+    settings.mapping_consent = MappingConsent::NotAsked;
+    assert!(!settings.is_mapping_allowed());
+
+    // AlwaysAllow: allowed
+    settings.mapping_consent = MappingConsent::AlwaysAllow;
+    assert!(settings.is_mapping_allowed());
+
+    // Once: allowed
+    settings.mapping_consent = MappingConsent::Once;
+    assert!(settings.is_mapping_allowed());
+
+    // Deny: not allowed
+    settings.mapping_consent = MappingConsent::Deny;
+    assert!(!settings.is_mapping_allowed());
+}
+
+#[test]
+fn test_mapping_consent_update_and_save() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let path = temp_dir.path().join("settings.json");
+
+    let mut settings = Settings::default();
+
+    // Update to AlwaysAllow and save
+    settings.update_mapping_consent(MappingConsent::AlwaysAllow, &path)
+        .expect("Failed to update consent");
+
+    // Load and verify
+    let loaded = Settings::load(&path).expect("Failed to load");
+    assert_eq!(loaded.mapping_consent, MappingConsent::AlwaysAllow);
+}
+
+#[test]
+fn test_mapping_consent_persistence() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let path = temp_dir.path().join("settings.json");
+
+    // Save with Deny
+    let mut settings = Settings::default();
+    settings.mapping_consent = MappingConsent::Deny;
+    settings.save(&path).expect("Failed to save");
+
+    // Load and verify
+    let loaded = Settings::load(&path).expect("Failed to load");
+    assert_eq!(loaded.mapping_consent, MappingConsent::Deny);
+}
+
+#[tokio::test]
+async fn test_settings_manager_mapping_consent() {
+    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+    let path = temp_file.path();
+
+    let manager = SettingsManager::new(path).await.expect("Failed to create manager");
+
+    // Default: NotAsked
+    assert_eq!(manager.get_mapping_consent().await, MappingConsent::NotAsked);
+    assert!(manager.should_ask_consent().await);
+    assert!(!manager.is_mapping_allowed().await);
+
+    // Set to AlwaysAllow
+    manager.set_mapping_consent(MappingConsent::AlwaysAllow).await
+        .expect("Failed to set consent");
+
+    assert_eq!(manager.get_mapping_consent().await, MappingConsent::AlwaysAllow);
+    assert!(!manager.should_ask_consent().await);
+    assert!(manager.is_mapping_allowed().await);
+
+    // Verify persisted
+    let loaded = Settings::load(path).expect("Failed to load");
+    assert_eq!(loaded.mapping_consent, MappingConsent::AlwaysAllow);
 }

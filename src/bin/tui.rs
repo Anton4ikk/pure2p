@@ -80,6 +80,28 @@ fn run_app<B: ratatui::backend::Backend>(
                             _ => {}
                         }
                     }
+                    Screen::MappingConsent => {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                // Allow exit without choosing
+                                app.back_to_main_menu();
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if let Some(screen) = &mut app.mapping_consent_screen {
+                                    screen.next_option();
+                                }
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if let Some(screen) = &mut app.mapping_consent_screen {
+                                    screen.previous_option();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                app.confirm_mapping_consent();
+                            }
+                            _ => {}
+                        }
+                    }
                     Screen::MainMenu => {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {

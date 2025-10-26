@@ -236,14 +236,13 @@ impl MessageQueue {
                 .unwrap_or(Priority::Normal);
 
             Ok(QueuedMessage {
-                message: Message {
-                    id: row.get(0)?,
-                    sender: row.get(1)?,
-                    recipient: row.get(2)?,
-                    content: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    delivered: false,
-                },
+                message: Message::new(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ),
                 priority,
                 attempts: row.get(6)?,
                 next_retry: row.get(7)?,
@@ -275,14 +274,13 @@ impl MessageQueue {
                 .unwrap_or(Priority::Normal);
 
             Ok(QueuedMessage {
-                message: Message {
-                    id: row.get(0)?,
-                    sender: row.get(1)?,
-                    recipient: row.get(2)?,
-                    content: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    delivered: false,
-                },
+                message: Message::new(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ),
                 priority,
                 attempts: row.get(6)?,
                 next_retry: row.get(7)?,
@@ -438,14 +436,13 @@ impl MessageQueue {
                 .unwrap_or(Priority::Normal);
 
             Ok(QueuedMessage {
-                message: Message {
-                    id: row.get(0)?,
-                    sender: row.get(1)?,
-                    recipient: row.get(2)?,
-                    content: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    delivered: false,
-                },
+                message: Message::new(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ),
                 priority,
                 attempts: row.get(6)?,
                 next_retry: row.get(7)?,

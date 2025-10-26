@@ -121,14 +121,14 @@ fn test_app_state_with_multiple_contacts_and_chats() {
         ));
 
         let mut chat = Chat::new(uid.clone());
-        let msg = Message {
-            id: format!("msg_{}", i),
-            sender: uid.clone(),
-            recipient: "self".to_string(),
-            content: vec![i as u8; 5],
-            timestamp: 1000 * i as i64,
-            delivered: true,
-        };
+        let mut msg = Message::new(
+            format!("msg_{}", i),
+            uid.clone(),
+            "self".to_string(),
+            vec![i as u8; 5],
+            1000 * i as i64,
+        );
+        msg.mark_delivered();
         chat.append_message(msg);
         chat.mark_unread();
         state.chats.push(chat);

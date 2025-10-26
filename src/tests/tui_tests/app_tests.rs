@@ -1,17 +1,41 @@
 // App Tests - Testing App struct and its methods
 
 use crate::tui::{App, Screen, MenuItem};
+use crate::storage::{MappingConsent, Settings};
+use std::sync::Mutex;
+
+// Global mutex to serialize access to settings.json across all tests
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Helper function to ensure settings file exists with consent set (for testing)
+/// This function acquires a lock to prevent race conditions between parallel tests
+fn ensure_consent_set() -> std::sync::MutexGuard<'static, ()> {
+    let guard = SETTINGS_LOCK.lock().unwrap();
+    let mut settings = Settings::load("settings.json").unwrap_or_default();
+    settings.mapping_consent = MappingConsent::AlwaysAllow;
+    let _ = settings.save("settings.json");
+    guard
+}
+
+/// Helper to clean up test settings (call AFTER test completes, releases lock)
+fn cleanup_test_settings(_guard: std::sync::MutexGuard<()>) {
+    let _ = std::fs::remove_file("settings.json");
+    // Guard is dropped here, releasing the lock
+}
 
 #[test]
 fn test_app_initialization() {
+    let _lock = ensure_consent_set();
     let app = App::new().expect("Failed to create app");
 
     // Verify initial state
     assert_eq!(
         app.current_screen,
         Screen::MainMenu,
-        "Should start on main menu"
+        "Should start on main menu (with consent already set)"
     );
+
+    cleanup_test_settings(_lock);
     assert_eq!(app.selected_index, 0, "Should start with first item selected");
     assert!(!app.should_quit, "Should not be quitting initially");
     assert!(
@@ -55,6 +79,7 @@ fn test_app_navigation() {
 
 #[test]
 fn test_app_show_share_contact_screen() {
+    let _lock = ensure_consent_set();
     let mut app = App::new().expect("Failed to create app");
 
     // Initially on main menu
@@ -75,6 +100,8 @@ fn test_app_show_share_contact_screen() {
     let screen = app.share_contact_screen.as_ref().unwrap();
     assert!(!screen.token.is_empty());
     assert!(screen.expiry > chrono::Utc::now());
+
+    cleanup_test_settings(_lock);
 }
 
 #[test]
@@ -131,6 +158,7 @@ fn test_app_select_exit() {
 
 #[test]
 fn test_app_show_import_contact_screen() {
+    let _lock = ensure_consent_set();
     let mut app = App::new().expect("Failed to create app");
 
     // Initially on main menu
@@ -146,6 +174,8 @@ fn test_app_show_import_contact_screen() {
         app.import_contact_screen.is_some(),
         "Import contact screen should be initialized"
     );
+
+    cleanup_test_settings(_lock);
 }
 
 #[test]
@@ -186,6 +216,7 @@ fn test_app_select_import_contact() {
 
 #[test]
 fn test_app_show_chat_list_screen() {
+    let _lock = ensure_consent_set();
     let mut app = App::new().expect("Failed to create app");
 
     // Initially on main menu
@@ -201,6 +232,8 @@ fn test_app_show_chat_list_screen() {
         app.chat_list_screen.is_some(),
         "Chat list screen should be initialized"
     );
+
+    cleanup_test_settings(_lock);
 }
 
 #[test]
@@ -661,6 +694,7 @@ fn test_confirm_delete_with_invalid_index() {
 
 #[test]
 fn test_app_show_settings_screen() {
+    let _lock = ensure_consent_set();
     let mut app = App::new().expect("Failed to create app");
 
     // Initially on main menu
@@ -673,6 +707,8 @@ fn test_app_show_settings_screen() {
     // Verify screen changed
     assert_eq!(app.current_screen, Screen::Settings);
     assert!(app.settings_screen.is_some());
+
+    cleanup_test_settings(_lock);
 }
 
 #[test]
@@ -710,11 +746,14 @@ fn test_app_select_settings() {
 
 #[test]
 fn test_app_startup_with_no_pending_messages() {
+    let _lock = ensure_consent_set();
     let app = App::new().expect("Failed to create app");
 
-    // With no pending messages, should start on MainMenu
+    // With no pending messages and consent set, should start on MainMenu
     assert_eq!(app.current_screen, Screen::MainMenu);
     assert!(app.startup_sync_screen.is_none());
+
+    cleanup_test_settings(_lock);
 }
 
 #[test]
@@ -747,4 +786,74 @@ fn test_app_complete_startup_sync() {
 
     assert_eq!(app.current_screen, Screen::MainMenu);
     assert!(app.startup_sync_screen.is_none());
+}
+
+// Mapping Consent Tests
+
+#[test]
+fn test_app_startup_with_no_consent() {
+    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _ = std::fs::remove_file("settings.json"); // Ensure no settings file exists
+    let app = App::new().expect("Failed to create app");
+
+    // Should start on MappingConsent screen when consent not asked
+    assert_eq!(app.current_screen, Screen::MappingConsent);
+    assert!(app.mapping_consent_screen.is_some());
+
+    cleanup_test_settings(_lock);
+}
+
+#[test]
+fn test_app_show_mapping_consent_screen() {
+    let _lock = ensure_consent_set();
+    let mut app = App::new().expect("Failed to create app");
+    cleanup_test_settings(_lock);
+
+    // Manually show consent screen
+    app.show_mapping_consent_screen();
+
+    assert_eq!(app.current_screen, Screen::MappingConsent);
+    assert!(app.mapping_consent_screen.is_some());
+}
+
+#[test]
+fn test_app_confirm_mapping_consent() {
+    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _ = std::fs::remove_file("settings.json");
+    let mut app = App::new().expect("Failed to create app");
+
+    // Should be on MappingConsent screen
+    assert_eq!(app.current_screen, Screen::MappingConsent);
+    assert!(app.mapping_consent_screen.is_some());
+
+    // Confirm consent (will save to settings.json)
+    app.confirm_mapping_consent();
+
+    // Should navigate to main menu
+    assert_eq!(app.current_screen, Screen::MainMenu);
+    assert!(app.mapping_consent_screen.is_none());
+
+    // Verify settings were saved
+    let settings = Settings::load("settings.json").expect("Failed to load settings");
+    assert_ne!(settings.mapping_consent, MappingConsent::NotAsked);
+
+    cleanup_test_settings(_lock);
+}
+
+#[test]
+fn test_app_back_from_mapping_consent() {
+    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _ = std::fs::remove_file("settings.json");
+    let mut app = App::new().expect("Failed to create app");
+
+    // Should be on MappingConsent screen
+    assert_eq!(app.current_screen, Screen::MappingConsent);
+
+    // Go back to main menu without confirming
+    app.back_to_main_menu();
+
+    assert_eq!(app.current_screen, Screen::MainMenu);
+    assert!(app.mapping_consent_screen.is_none());
+
+    cleanup_test_settings(_lock);
 }

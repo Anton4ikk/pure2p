@@ -5,6 +5,8 @@
 pub enum Screen {
     /// Initial sync screen showing pending message retry progress
     StartupSync,
+    /// Mapping consent dialog (shown on first run)
+    MappingConsent,
     /// Main menu for navigation
     MainMenu,
     /// Share contact token screen

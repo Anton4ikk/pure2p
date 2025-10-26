@@ -22,6 +22,8 @@ pub struct App {
     pub should_quit: bool,
     /// Application state (chats, contacts, settings)
     pub app_state: AppState,
+    /// Mapping consent screen (when active)
+    pub mapping_consent_screen: Option<MappingConsentScreen>,
     /// Share contact screen (when active)
     pub share_contact_screen: Option<ShareContactScreen>,
     /// Import contact screen (when active)
@@ -45,14 +47,24 @@ impl App {
         let local_ip = Self::get_local_ip();
         let app_state = AppState::new();
 
+        // Load settings to check mapping consent
+        let settings = crate::storage::Settings::load("settings.json").unwrap_or_default();
+        let should_ask_consent = settings.should_ask_consent();
+
         // Simulate checking for pending messages
         // In a real implementation, this would query the MessageQueue
         let pending_count = 0; // TODO: Query actual queue
 
-        let (current_screen, startup_sync_screen) = if pending_count > 0 {
-            (Screen::StartupSync, Some(StartupSyncScreen::new(pending_count)))
+        // Determine initial screen based on consent and pending messages
+        let (current_screen, startup_sync_screen, mapping_consent_screen) = if should_ask_consent {
+            // First run: show mapping consent dialog
+            (Screen::MappingConsent, None, Some(MappingConsentScreen::new()))
+        } else if pending_count > 0 {
+            // Has pending messages: show startup sync
+            (Screen::StartupSync, Some(StartupSyncScreen::new(pending_count)), None)
         } else {
-            (Screen::MainMenu, None)
+            // Normal startup: show main menu
+            (Screen::MainMenu, None, None)
         };
 
         Ok(Self {
@@ -63,6 +75,7 @@ impl App {
             local_ip,
             should_quit: false,
             app_state,
+            mapping_consent_screen,
             share_contact_screen: None,
             import_contact_screen: None,
             chat_list_screen: None,
@@ -71,6 +84,12 @@ impl App {
             diagnostics_screen: None,
             startup_sync_screen,
         })
+    }
+
+    /// Show mapping consent screen
+    pub fn show_mapping_consent_screen(&mut self) {
+        self.mapping_consent_screen = Some(MappingConsentScreen::new());
+        self.current_screen = Screen::MappingConsent;
     }
 
     /// Get currently selected menu item
@@ -203,6 +222,7 @@ impl App {
     /// Return to main menu
     pub fn back_to_main_menu(&mut self) {
         self.current_screen = Screen::MainMenu;
+        self.mapping_consent_screen = None;
         self.share_contact_screen = None;
         self.import_contact_screen = None;
         self.chat_list_screen = None;
@@ -221,6 +241,22 @@ impl App {
     pub fn complete_startup_sync(&mut self) {
         self.current_screen = Screen::MainMenu;
         self.startup_sync_screen = None;
+    }
+
+    /// Confirm mapping consent selection and save to settings
+    pub fn confirm_mapping_consent(&mut self) {
+        if let Some(screen) = &self.mapping_consent_screen {
+            let consent = screen.get_consent();
+
+            // Load settings, update consent, and save
+            if let Ok(mut settings) = crate::storage::Settings::load("settings.json") {
+                let _ = settings.update_mapping_consent(consent, "settings.json");
+            }
+        }
+
+        // Clear screen and return to main menu
+        self.mapping_consent_screen = None;
+        self.current_screen = Screen::MainMenu;
     }
 
     /// Update startup sync progress
@@ -316,14 +352,13 @@ impl App {
             // Find the chat and add the message
             if let Some(chat) = self.app_state.chats.iter_mut().find(|c| c.contact_uid == contact_uid) {
                 // Create a new message
-                let message = Message {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    sender: self.keypair.uid.to_string(),
-                    recipient: contact_uid.clone(),
-                    content: message_content.as_bytes().to_vec(),
-                    timestamp: Utc::now().timestamp_millis(),
-                    delivered: false, // Will be marked true when actually sent
-                };
+                let message = Message::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    self.keypair.uid.to_string(),
+                    contact_uid.clone(),
+                    message_content.as_bytes().to_vec(),
+                    Utc::now().timestamp_millis(),
+                );
 
                 chat.append_message(message);
                 chat_view.clear_input();

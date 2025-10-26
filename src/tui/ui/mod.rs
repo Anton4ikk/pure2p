@@ -4,6 +4,7 @@
 //! Each screen has its own file for better maintainability.
 
 mod startup_sync;
+mod mapping_consent;
 mod main_menu;
 mod share_contact;
 mod import_contact;
@@ -19,6 +20,7 @@ use crate::tui::app::App;
 
 // Re-export render functions
 pub use startup_sync::render_startup_sync;
+pub use mapping_consent::render_mapping_consent;
 pub use main_menu::render_main_menu;
 pub use share_contact::render_share_contact;
 pub use import_contact::render_import_contact;
@@ -34,6 +36,7 @@ pub use helpers::format_duration_until;
 pub fn ui(f: &mut Frame, app: &App) {
     match app.current_screen {
         Screen::StartupSync => render_startup_sync(f, app),
+        Screen::MappingConsent => render_mapping_consent(f, app),
         Screen::MainMenu => render_main_menu(f, app),
         Screen::ShareContact => render_share_contact(f, app),
         Screen::ImportContact => render_import_contact(f, app),
