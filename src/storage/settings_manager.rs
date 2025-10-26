@@ -1,6 +1,6 @@
 //! Thread-safe settings manager for concurrent access
 
-use crate::{storage::settings::{MappingConsent, Settings}, Result};
+use crate::{storage::settings::Settings, Result};
 
 /// Thread-safe settings manager for UI layer access
 ///
@@ -174,27 +174,4 @@ impl SettingsManager {
         settings.save(self.settings_path.as_str())
     }
 
-    /// Get mapping consent status
-    pub async fn get_mapping_consent(&self) -> MappingConsent {
-        let settings = self.settings.read().await;
-        settings.mapping_consent
-    }
-
-    /// Set mapping consent and auto-save
-    pub async fn set_mapping_consent(&self, consent: MappingConsent) -> Result<()> {
-        let mut settings = self.settings.write().await;
-        settings.update_mapping_consent(consent, self.settings_path.as_str())
-    }
-
-    /// Check if mapping is allowed
-    pub async fn is_mapping_allowed(&self) -> bool {
-        let settings = self.settings.read().await;
-        settings.is_mapping_allowed()
-    }
-
-    /// Check if consent dialog should be shown
-    pub async fn should_ask_consent(&self) -> bool {
-        let settings = self.settings.read().await;
-        settings.should_ask_consent()
-    }
 }

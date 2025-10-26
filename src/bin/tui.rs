@@ -25,6 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create app state
     let mut app = App::new()?;
 
+    // Trigger background connectivity diagnostics on startup
+    app.trigger_startup_connectivity();
+
     // Run main loop
     let res = run_app(&mut terminal, &mut app);
 
@@ -51,6 +54,11 @@ fn run_app<B: ratatui::backend::Backend>(
     loop {
         terminal.draw(|f| ui(f, app))?;
 
+        // Poll for startup connectivity completion (runs in background on all screens)
+        if app.connectivity_result.is_none() {
+            app.poll_startup_connectivity();
+        }
+
         // Handle startup sync screen updates
         if app.current_screen == Screen::StartupSync {
             app.update_startup_sync();
@@ -62,6 +70,11 @@ fn run_app<B: ratatui::backend::Backend>(
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
             }
+        }
+
+        // Poll for diagnostics refresh completion
+        if app.current_screen == Screen::Diagnostics {
+            app.poll_diagnostics_result();
         }
 
         if event::poll(std::time::Duration::from_millis(100))? {
@@ -76,28 +89,6 @@ fn run_app<B: ratatui::backend::Backend>(
                                         app.complete_startup_sync();
                                     }
                                 }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Screen::MappingConsent => {
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => {
-                                // Allow exit without choosing
-                                app.back_to_main_menu();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                if let Some(screen) = &mut app.mapping_consent_screen {
-                                    screen.next_option();
-                                }
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                if let Some(screen) = &mut app.mapping_consent_screen {
-                                    screen.previous_option();
-                                }
-                            }
-                            KeyCode::Enter => {
-                                app.confirm_mapping_consent();
                             }
                             _ => {}
                         }
@@ -295,11 +286,11 @@ fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => {
                                 app.back_to_main_menu();
                             }
-                            KeyCode::Char('r') => {
+                            KeyCode::Char('r') | KeyCode::F(5) => {
                                 if let Some(screen) = &mut app.diagnostics_screen {
                                     if !screen.is_refreshing {
                                         screen.start_refresh();
-                                        // TODO: Actually trigger diagnostics refresh
+                                        app.trigger_diagnostics_refresh();
                                     }
                                 }
                             }

@@ -3,68 +3,8 @@
 use arboard::Clipboard;
 use chrono::{DateTime, Duration, Utc};
 use crate::crypto::KeyPair;
-use crate::storage::{generate_contact_token, parse_contact_token, Contact, MappingConsent, Settings};
+use crate::storage::{generate_contact_token, parse_contact_token, Contact, Settings};
 use std::fs;
-
-/// Mapping Consent screen state
-#[derive(Debug)]
-pub struct MappingConsentScreen {
-    /// Currently selected option (0 = Always Allow, 1 = Once, 2 = Deny)
-    pub selected_option: usize,
-}
-
-impl MappingConsentScreen {
-    /// Create new mapping consent screen
-    pub fn new() -> Self {
-        Self {
-            selected_option: 0, // Default to "Always Allow"
-        }
-    }
-
-    /// Move to next option
-    pub fn next_option(&mut self) {
-        self.selected_option = (self.selected_option + 1) % 3;
-    }
-
-    /// Move to previous option
-    pub fn previous_option(&mut self) {
-        if self.selected_option > 0 {
-            self.selected_option -= 1;
-        } else {
-            self.selected_option = 2;
-        }
-    }
-
-    /// Get the consent based on selected option
-    pub fn get_consent(&self) -> MappingConsent {
-        match self.selected_option {
-            0 => MappingConsent::AlwaysAllow,
-            1 => MappingConsent::Once,
-            2 => MappingConsent::Deny,
-            _ => MappingConsent::NotAsked, // Fallback (should never happen)
-        }
-    }
-
-    /// Get label for current option
-    pub fn get_option_label(&self, index: usize) -> &str {
-        match index {
-            0 => "Always allow",
-            1 => "Once",
-            2 => "Deny",
-            _ => "Unknown",
-        }
-    }
-
-    /// Get description for current option
-    pub fn get_option_description(&self, index: usize) -> &str {
-        match index {
-            0 => "Automatically configure network on every startup",
-            1 => "Allow only this time (ask again next time)",
-            2 => "Never configure network automatically",
-            _ => "",
-        }
-    }
-}
 
 /// Share Contact screen state
 #[derive(Debug)]

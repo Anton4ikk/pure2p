@@ -71,8 +71,8 @@ src/
 │   ├── mod.rs          # Module exports
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
-│   ├── app.rs          # App business logic
-│   └── ui/             # Modular rendering (10 files)
+│   ├── app.rs          # App business logic with automatic background connectivity
+│   └── ui/             # Modular rendering (9 files - consent screen removed)
 │       ├── mod.rs      # Main ui() dispatcher
 │       ├── startup_sync.rs
 │       ├── main_menu.rs
@@ -83,7 +83,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (301 tests)
+├── tests/              # Unit tests (294 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -92,17 +92,17 @@ src/
 │   ├── messaging_tests.rs
 │   ├── connectivity_tests.rs  # Includes CGNAT detection
 │   ├── lib_tests.rs
-│   ├── storage_tests/  # Storage module tests (51 tests)
+│   ├── storage_tests/  # Storage module tests (56 tests)
 │   │   ├── mod.rs
 │   │   ├── contact_tests.rs
 │   │   ├── token_tests.rs
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (125 tests)
+│   └── tui_tests/      # TUI module tests (118 tests)
 │       ├── mod.rs
 │       ├── app_tests.rs
-│       ├── screen_tests/     # Modularized screen tests (82 tests)
+│       ├── screen_tests/     # Modularized screen tests (75 tests - consent removed)
 │       │   ├── mod.rs
 │       │   ├── share_contact_tests.rs
 │       │   ├── import_contact_tests.rs
@@ -115,7 +115,7 @@ src/
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
-    └── tui.rs          # TUI binary (thin wrapper)
+    └── tui.rs          # TUI binary (thin wrapper, triggers auto-connectivity)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.
@@ -131,7 +131,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (301 total)
+cargo test                     # All tests (294 total)
 
 # Quality
 cargo fmt                      # Format
@@ -180,15 +180,15 @@ src/tests/
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
 ├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
 ├── lib_tests.rs          (1 test)    - Library init
-├── storage_tests/        (62 tests)  - Organized by storage module
+├── storage_tests/        (56 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
 │   ├── token_tests.rs    (16 tests)  - Token generation/parsing, signature verification
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
-│   └── settings_tests.rs (22 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (125 tests) - Organized by TUI components
-    ├── app_tests.rs      (36 tests)  - App business logic
-    ├── screen_tests/     (82 tests)  - Modularized by screen type
+│   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
+└── tui_tests/            (118 tests) - Organized by TUI components
+    ├── app_tests.rs      (32 tests)  - App business logic
+    ├── screen_tests/     (75 tests)  - Modularized by screen type (consent screen removed)
     │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
     │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
     │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen

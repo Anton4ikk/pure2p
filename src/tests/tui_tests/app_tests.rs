@@ -1,7 +1,7 @@
 // App Tests - Testing App struct and its methods
 
 use crate::tui::{App, Screen, MenuItem};
-use crate::storage::{MappingConsent, Settings};
+use crate::storage::Settings;
 use std::sync::Mutex;
 
 // Global mutex to serialize access to settings.json across all tests
@@ -11,8 +11,7 @@ static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 /// This function acquires a lock to prevent race conditions between parallel tests
 fn ensure_consent_set() -> std::sync::MutexGuard<'static, ()> {
     let guard = SETTINGS_LOCK.lock().unwrap();
-    let mut settings = Settings::load("settings.json").unwrap_or_default();
-    settings.mapping_consent = MappingConsent::AlwaysAllow;
+    let settings = Settings::load("settings.json").unwrap_or_default();
     let _ = settings.save("settings.json");
     guard
 }
@@ -788,72 +787,3 @@ fn test_app_complete_startup_sync() {
     assert!(app.startup_sync_screen.is_none());
 }
 
-// Mapping Consent Tests
-
-#[test]
-fn test_app_startup_with_no_consent() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
-    let _ = std::fs::remove_file("settings.json"); // Ensure no settings file exists
-    let app = App::new().expect("Failed to create app");
-
-    // Should start on MappingConsent screen when consent not asked
-    assert_eq!(app.current_screen, Screen::MappingConsent);
-    assert!(app.mapping_consent_screen.is_some());
-
-    cleanup_test_settings(_lock);
-}
-
-#[test]
-fn test_app_show_mapping_consent_screen() {
-    let _lock = ensure_consent_set();
-    let mut app = App::new().expect("Failed to create app");
-    cleanup_test_settings(_lock);
-
-    // Manually show consent screen
-    app.show_mapping_consent_screen();
-
-    assert_eq!(app.current_screen, Screen::MappingConsent);
-    assert!(app.mapping_consent_screen.is_some());
-}
-
-#[test]
-fn test_app_confirm_mapping_consent() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
-    let _ = std::fs::remove_file("settings.json");
-    let mut app = App::new().expect("Failed to create app");
-
-    // Should be on MappingConsent screen
-    assert_eq!(app.current_screen, Screen::MappingConsent);
-    assert!(app.mapping_consent_screen.is_some());
-
-    // Confirm consent (will save to settings.json)
-    app.confirm_mapping_consent();
-
-    // Should navigate to main menu
-    assert_eq!(app.current_screen, Screen::MainMenu);
-    assert!(app.mapping_consent_screen.is_none());
-
-    // Verify settings were saved
-    let settings = Settings::load("settings.json").expect("Failed to load settings");
-    assert_ne!(settings.mapping_consent, MappingConsent::NotAsked);
-
-    cleanup_test_settings(_lock);
-}
-
-#[test]
-fn test_app_back_from_mapping_consent() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
-    let _ = std::fs::remove_file("settings.json");
-    let mut app = App::new().expect("Failed to create app");
-
-    // Should be on MappingConsent screen
-    assert_eq!(app.current_screen, Screen::MappingConsent);
-
-    // Go back to main menu without confirming
-    app.back_to_main_menu();
-
-    assert_eq!(app.current_screen, Screen::MainMenu);
-    assert!(app.mapping_consent_screen.is_none());
-
-    cleanup_test_settings(_lock);
-}

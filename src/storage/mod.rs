@@ -29,7 +29,7 @@ pub use app_state::AppState;
 pub use chat::Chat;
 pub use contact::Contact;
 pub use message::{DeliveryStatus, Message};
-pub use settings::{MappingConsent, Settings};
+pub use settings::Settings;
 pub use settings_manager::SettingsManager;
 pub use storage_db::Storage;
 

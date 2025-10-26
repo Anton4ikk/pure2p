@@ -1,7 +1,6 @@
 // Screen Tests Module - Testing individual TUI screen structs
 // Organized by screen type for maintainability
 
-mod mapping_consent_tests;    // MappingConsentScreen (7 tests)
 mod share_contact_tests;      // ShareContactScreen (5 tests)
 mod import_contact_tests;     // ImportContactScreen (10 tests)
 mod chat_list_tests;          // ChatListScreen (5 tests)

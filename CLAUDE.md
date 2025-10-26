@@ -63,7 +63,7 @@ cargo fmt
 **`tui`** - Terminal UI module (library, not binary). Reusable across platforms:
 - `types.rs` - Screen and MenuItem enums
 - `screens.rs` - All screen state structs (ShareContact, ImportContact, ChatList, ChatView, Settings, Diagnostics, StartupSync)
-- `app.rs` - Main App struct with business logic
+- `app.rs` - Main App struct with business logic, automatic background connectivity on startup
 - `ui.rs` - Rendering functions (ratatui-based)
 
 ## Data Structures
@@ -76,40 +76,51 @@ cargo fmt
 
 **Settings** - Retry intervals, storage path, contact expiry, max retries. Auto-save to JSON. Thread-safe SettingsManager for UI.
 
+**App (TUI)** - Main application state with automatic connectivity:
+- `connectivity_result` - Stores startup/latest connectivity test results
+- `local_ip` - Automatically updated from connectivity results (external IP:port)
+- `local_port` - Port for listening and connectivity tests (default: 8080)
+- `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
+- Startup: Automatically runs `establish_connectivity()` in background on launch
+- ShareContact: Uses detected external IP for accurate contact tokens
+
 ## TUI Architecture
 
-**Binary (`src/bin/tui.rs`)** - Thin wrapper (~280 lines):
-- `main()` - Terminal initialization/cleanup
+**Binary (`src/bin/tui.rs`)** - Thin wrapper (~320 lines):
+- `main()` - Terminal initialization/cleanup, triggers startup connectivity
 - `run_app()` - Event loop with 100ms polling
+- Polls for startup connectivity completion (updates `local_ip` when ready)
+- Polls for diagnostics refresh completion (when on Diagnostics screen)
 - Keyboard mapping to App methods
 
 **Library (`src/tui/`)** - Reusable UI logic:
 - Used by TUI binary, future mobile/desktop UIs
-- Fully tested (301 unit tests)
+- Fully tested (294 unit tests)
 - Platform-agnostic business logic
 - Modular UI rendering (`ui/` directory with per-screen modules)
+- Background async connectivity via spawned threads with tokio runtime
 
 **UI Module Structure (`src/tui/ui/`):**
 - `mod.rs` - Main `ui()` dispatcher and re-exports
 - `startup_sync.rs` - Startup sync progress screen
 - `main_menu.rs` - Main menu with hotkey navigation (c/s/i/n)
-- `share_contact.rs` - Contact token generation screen
+- `share_contact.rs` - Contact token generation screen (uses auto-detected external IP)
 - `import_contact.rs` - Contact token import screen
 - `chat_list.rs` - Chat list with delete confirmation popup
 - `chat_view.rs` - Individual chat conversation view
 - `settings.rs` - Settings configuration screen
-- `diagnostics.rs` - Network diagnostics (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size)
+- `diagnostics.rs` - Network diagnostics with manual refresh (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size, CGNAT detection)
 - `helpers.rs` - Shared UI utilities (`format_duration_until`)
 
 **Screens:**
-1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time)
+1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time), automatic on startup if messages pending
 2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n)
-3. **ShareContact** - Generate tokens (copy/save), shows UID/IP, expiry countdown
+3. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), expiry countdown
 4. **ImportContact** - Parse/validate tokens, expiry check, signature verification
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 7. **Settings** - Edit retry interval (1-1440 min), auto-save with toast
-8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection
+8. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection, manual refresh (r/F5) triggers background async tests
 
 **Keyboard:**
 - Global: q/Esc=back/quit, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
@@ -197,6 +208,9 @@ cargo fmt
 - Stops on first success, continues through all on failure
 - `result.summary()` generates UX string: "⚠️ CGNAT → IPv6: no → PCP: ok" (if CGNAT detected)
 - CGNAT detection runs automatically after each successful mapping
+- **Automatic on startup**: TUI triggers connectivity test in background thread on app launch
+- **Manual refresh**: Diagnostics screen 'r'/F5 keys trigger new background test
+- Results stored in `App.connectivity_result`, external IP auto-updates `App.local_ip`
 
 **Protocol Details**:
 - **PCP** (RFC 6887): 60-byte MAP requests, up to 1100-byte responses, UDP port 5351
@@ -213,7 +227,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (301 total tests)
+- All tests in `src/tests/` directory (294 total tests
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -227,16 +241,16 @@ cargo fmt
 - `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
 - `lib_tests.rs` (1 test) - Library initialization
 
-**`storage_tests/` (62 tests):**
+**`storage_tests/` (56 tests):**
 - `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
 - `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
 - `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
 - `app_state_tests.rs` (11 tests) - AppState (save/load, sync, chat management)
-- `settings_tests.rs` (22 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
+- `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
-**`tui_tests/` (125 tests):**
-- `app_tests.rs` (36 tests) - App struct and business logic
-- `screen_tests/` (82 tests) - All screens, modularized by screen type:
+**`tui_tests/` (118 tests):**
+- `app_tests.rs` (32 tests) - App struct and business logic
+- `screen_tests/` (75 tests) - All screens, modularized by screen type (consent screen removed):
   - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
   - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)
   - `chat_list_tests.rs` (5 tests) - ChatListScreen (navigation, delete popup)
@@ -249,7 +263,7 @@ cargo fmt
 - `types_tests.rs` (3 tests) - MenuItem enum
 - `ui_tests.rs` (4 tests) - UI helper functions (format_duration_until)
 
-**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (10 files) for maintainability. Screen tests are modularized in `screen_tests/` subdirectory for easier navigation and maintenance.
+**Note:** Binary (`src/bin/tui.rs`) has no tests - it's glue code. All logic tested in `tui_tests/`. UI rendering functions in `src/tui/ui/` are modular (9 files - consent screen removed) for maintainability. Screen tests are modularized in `screen_tests/` subdirectory for easier navigation and maintenance.
 
 ## Dependencies
 

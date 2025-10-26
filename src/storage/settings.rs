@@ -3,25 +3,6 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-/// Port mapping consent options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MappingConsent {
-    /// User has not been asked yet (first run)
-    NotAsked,
-    /// User granted consent (always allow automatic port mapping)
-    AlwaysAllow,
-    /// User granted one-time consent (ask again next time)
-    Once,
-    /// User denied consent (never auto-map ports)
-    Deny,
-}
-
-impl Default for MappingConsent {
-    fn default() -> Self {
-        Self::NotAsked
-    }
-}
-
 /// Application settings
 ///
 /// Persistent configuration for the Pure2P application.
@@ -59,8 +40,6 @@ pub struct Settings {
     pub retry_interval_minutes: u32,
     /// Storage path for application data
     pub storage_path: String,
-    /// Port mapping consent status (for UPnP/NAT-PMP/PCP)
-    pub mapping_consent: MappingConsent,
 }
 
 impl Settings {
@@ -156,35 +135,6 @@ impl Settings {
         // Prefer milliseconds value as source of truth
         self.retry_interval_minutes = (self.global_retry_interval_ms / (60 * 1000)) as u32;
     }
-
-    /// Update port mapping consent and auto-save
-    ///
-    /// # Arguments
-    /// * `consent` - New consent setting
-    /// * `save_path` - Path to save the updated settings
-    ///
-    /// # Returns
-    /// Result indicating success or failure
-    pub fn update_mapping_consent<P: AsRef<std::path::Path>>(&mut self, consent: MappingConsent, save_path: P) -> Result<()> {
-        self.mapping_consent = consent;
-        self.save(save_path)
-    }
-
-    /// Check if port mapping is allowed based on consent
-    ///
-    /// # Returns
-    /// `true` if port mapping should be performed (AlwaysAllow or Once), `false` otherwise
-    pub fn is_mapping_allowed(&self) -> bool {
-        matches!(self.mapping_consent, MappingConsent::AlwaysAllow | MappingConsent::Once)
-    }
-
-    /// Check if consent dialog should be shown
-    ///
-    /// # Returns
-    /// `true` if user hasn't been asked yet (NotAsked), `false` otherwise
-    pub fn should_ask_consent(&self) -> bool {
-        self.mapping_consent == MappingConsent::NotAsked
-    }
 }
 
 impl Default for Settings {
@@ -198,7 +148,6 @@ impl Default for Settings {
             global_retry_interval_ms: 600_000, // 10 minutes = 600,000 ms
             retry_interval_minutes: 10, // 10 minutes
             storage_path: "./data".to_string(), // Default storage path
-            mapping_consent: MappingConsent::NotAsked, // Ask on first run
         }
     }
 }

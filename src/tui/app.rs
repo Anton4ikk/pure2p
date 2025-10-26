@@ -22,8 +22,6 @@ pub struct App {
     pub should_quit: bool,
     /// Application state (chats, contacts, settings)
     pub app_state: AppState,
-    /// Mapping consent screen (when active)
-    pub mapping_consent_screen: Option<MappingConsentScreen>,
     /// Share contact screen (when active)
     pub share_contact_screen: Option<ShareContactScreen>,
     /// Import contact screen (when active)
@@ -38,6 +36,12 @@ pub struct App {
     pub diagnostics_screen: Option<DiagnosticsScreen>,
     /// Startup sync screen (when active)
     pub startup_sync_screen: Option<StartupSyncScreen>,
+    /// Background diagnostics refresh handle
+    pub diagnostics_refresh_handle: Option<std::thread::JoinHandle<crate::connectivity::ConnectivityResult>>,
+    /// Connectivity result from startup or last refresh
+    pub connectivity_result: Option<crate::connectivity::ConnectivityResult>,
+    /// Local port for connectivity
+    pub local_port: u16,
 }
 
 impl App {
@@ -47,25 +51,20 @@ impl App {
         let local_ip = Self::get_local_ip();
         let app_state = AppState::new();
 
-        // Load settings to check mapping consent
-        let settings = crate::storage::Settings::load("settings.json").unwrap_or_default();
-        let should_ask_consent = settings.should_ask_consent();
-
         // Simulate checking for pending messages
         // In a real implementation, this would query the MessageQueue
         let pending_count = 0; // TODO: Query actual queue
 
-        // Determine initial screen based on consent and pending messages
-        let (current_screen, startup_sync_screen, mapping_consent_screen) = if should_ask_consent {
-            // First run: show mapping consent dialog
-            (Screen::MappingConsent, None, Some(MappingConsentScreen::new()))
-        } else if pending_count > 0 {
+        // Determine initial screen based on pending messages
+        let (current_screen, startup_sync_screen) = if pending_count > 0 {
             // Has pending messages: show startup sync
-            (Screen::StartupSync, Some(StartupSyncScreen::new(pending_count)), None)
+            (Screen::StartupSync, Some(StartupSyncScreen::new(pending_count)))
         } else {
             // Normal startup: show main menu
-            (Screen::MainMenu, None, None)
+            (Screen::MainMenu, None)
         };
+
+        let local_port = 8080; // Default port
 
         Ok(Self {
             current_screen,
@@ -75,7 +74,6 @@ impl App {
             local_ip,
             should_quit: false,
             app_state,
-            mapping_consent_screen,
             share_contact_screen: None,
             import_contact_screen: None,
             chat_list_screen: None,
@@ -83,14 +81,62 @@ impl App {
             settings_screen: None,
             diagnostics_screen: None,
             startup_sync_screen,
+            diagnostics_refresh_handle: None,
+            connectivity_result: None,
+            local_port,
         })
     }
 
-    /// Show mapping consent screen
-    pub fn show_mapping_consent_screen(&mut self) {
-        self.mapping_consent_screen = Some(MappingConsentScreen::new());
-        self.current_screen = Screen::MappingConsent;
+    /// Trigger startup connectivity diagnostics (non-blocking)
+    ///
+    /// Should be called after App::new() to detect external IP for contact sharing.
+    pub fn trigger_startup_connectivity(&mut self) {
+        // Don't start if already running
+        if self.diagnostics_refresh_handle.is_some() {
+            return;
+        }
+
+        let port = self.local_port;
+
+        // Spawn background thread with tokio runtime
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(async move {
+                crate::connectivity::establish_connectivity(port).await
+            })
+        });
+
+        self.diagnostics_refresh_handle = Some(handle);
     }
+
+    /// Poll for startup connectivity completion and update local IP
+    ///
+    /// Returns true if connectivity completed this call.
+    pub fn poll_startup_connectivity(&mut self) -> bool {
+        if let Some(handle) = self.diagnostics_refresh_handle.take() {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(result) => {
+                        // Update local_ip from the mapping result
+                        if let Some(mapping) = &result.mapping {
+                            self.local_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                        }
+                        self.connectivity_result = Some(result);
+                        return true;
+                    }
+                    Err(_) => {
+                        // Failed to get connectivity, keep default local_ip
+                        return true;
+                    }
+                }
+            } else {
+                // Thread still running, put it back
+                self.diagnostics_refresh_handle = Some(handle);
+            }
+        }
+        false
+    }
+
 
     /// Get currently selected menu item
     pub fn selected_item(&self) -> MenuItem {
@@ -161,11 +207,15 @@ impl App {
 
     /// Show diagnostics screen
     pub fn show_diagnostics_screen(&mut self) {
-        let default_port = 8080; // TODO: Get from actual listening port
-        let mut screen = DiagnosticsScreen::new(default_port);
+        let mut screen = DiagnosticsScreen::new(self.local_port);
 
         // Populate with current app state data
         self.update_diagnostics_with_app_state(&mut screen);
+
+        // Apply existing connectivity result if available
+        if let Some(result) = &self.connectivity_result {
+            screen.update_from_connectivity_result(result);
+        }
 
         self.diagnostics_screen = Some(screen);
         self.current_screen = Screen::Diagnostics;
@@ -219,10 +269,76 @@ impl App {
         }
     }
 
+    /// Trigger async diagnostics refresh (non-blocking)
+    ///
+    /// This spawns a background thread with a tokio runtime to perform
+    /// connectivity tests. Results are automatically polled in `poll_diagnostics_result()`.
+    pub fn trigger_diagnostics_refresh(&mut self) {
+        // Don't start a new refresh if one is already running
+        if self.diagnostics_refresh_handle.is_some() {
+            return;
+        }
+
+        if let Some(screen) = &mut self.diagnostics_screen {
+            let port = screen.local_port;
+
+            // Spawn background thread with tokio runtime
+            let handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async move {
+                    crate::connectivity::establish_connectivity(port).await
+                })
+            });
+
+            self.diagnostics_refresh_handle = Some(handle);
+        }
+    }
+
+    /// Poll for diagnostics refresh completion (non-blocking)
+    ///
+    /// Checks if the background refresh thread has completed and applies results.
+    /// Returns true if a refresh was completed this call.
+    pub fn poll_diagnostics_result(&mut self) -> bool {
+        if let Some(handle) = self.diagnostics_refresh_handle.take() {
+            // Check if thread is finished (non-blocking)
+            if handle.is_finished() {
+                // Thread is done, get the result
+                match handle.join() {
+                    Ok(result) => {
+                        // Update local_ip from the mapping result
+                        if let Some(mapping) = &result.mapping {
+                            self.local_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
+                        }
+                        self.connectivity_result = Some(result.clone());
+                        self.apply_connectivity_result(result);
+                        return true;
+                    }
+                    Err(e) => {
+                        if let Some(screen) = &mut self.diagnostics_screen {
+                            screen.set_status_message(format!("Refresh failed: {:?}", e));
+                            screen.is_refreshing = false;
+                        }
+                        return true;
+                    }
+                }
+            } else {
+                // Thread is still running, put the handle back
+                self.diagnostics_refresh_handle = Some(handle);
+            }
+        }
+        false
+    }
+
+    /// Apply connectivity result to diagnostics screen
+    pub fn apply_connectivity_result(&mut self, result: crate::connectivity::ConnectivityResult) {
+        if let Some(screen) = &mut self.diagnostics_screen {
+            screen.update_from_connectivity_result(&result);
+        }
+    }
+
     /// Return to main menu
     pub fn back_to_main_menu(&mut self) {
         self.current_screen = Screen::MainMenu;
-        self.mapping_consent_screen = None;
         self.share_contact_screen = None;
         self.import_contact_screen = None;
         self.chat_list_screen = None;
@@ -241,22 +357,6 @@ impl App {
     pub fn complete_startup_sync(&mut self) {
         self.current_screen = Screen::MainMenu;
         self.startup_sync_screen = None;
-    }
-
-    /// Confirm mapping consent selection and save to settings
-    pub fn confirm_mapping_consent(&mut self) {
-        if let Some(screen) = &self.mapping_consent_screen {
-            let consent = screen.get_consent();
-
-            // Load settings, update consent, and save
-            if let Ok(mut settings) = crate::storage::Settings::load("settings.json") {
-                let _ = settings.update_mapping_consent(consent, "settings.json");
-            }
-        }
-
-        // Clear screen and return to main menu
-        self.mapping_consent_screen = None;
-        self.current_screen = Screen::MainMenu;
     }
 
     /// Update startup sync progress
