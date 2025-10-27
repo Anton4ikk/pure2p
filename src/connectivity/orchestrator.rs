@@ -1,11 +1,13 @@
 //! Connectivity orchestrator - unified strategy selection
 
 use super::cgnat::detect_cgnat;
+use super::http_ip::detect_external_ip;
 use super::ipv6::check_ipv6_connectivity;
 use super::natpmp::try_natpmp_mapping;
 use super::pcp::try_pcp_mapping;
 use super::upnp::try_upnp_mapping;
-use super::types::{ConnectivityResult, StrategyAttempt};
+use super::types::{ConnectivityResult, MappingProtocol, PortMappingResult, StrategyAttempt};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 /// Establish connectivity using automatic protocol detection and fallback
@@ -15,6 +17,7 @@ use tracing::{debug, error, info, warn};
 /// 2. PCP (Port Control Protocol - modern, efficient)
 /// 3. NAT-PMP (legacy Apple/Cisco protocol)
 /// 4. UPnP IGD (universal but slower)
+/// 5. HTTP-based IP detection (fallback when all NAT traversal fails)
 ///
 /// Returns a comprehensive result showing all attempts and the final mapping.
 ///
@@ -45,7 +48,7 @@ use tracing::{debug, error, info, warn};
 /// ```
 pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
     info!(
-        "Establishing connectivity for port {} (trying IPv6 → PCP → NAT-PMP → UPnP)",
+        "Establishing connectivity for port {} (trying IPv6 → PCP → NAT-PMP → UPnP → HTTP IP detection)",
         port
     );
 
@@ -113,6 +116,37 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
         Err(e) => {
             warn!("UPnP failed: {}", e);
             result.upnp = StrategyAttempt::Failed(e.to_string());
+        }
+    }
+
+    // All NAT traversal strategies failed - try HTTP-based IP detection as final fallback
+    warn!("All NAT traversal protocols failed. Attempting HTTP-based IP detection...");
+    match detect_external_ip().await {
+        Ok(external_ip) => {
+            info!("External IP detected via HTTP: {}", external_ip);
+
+            // Create a mapping result without port mapping (direct connectivity attempt)
+            let created_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+
+            let mapping = PortMappingResult {
+                external_ip,
+                external_port: port, // No port mapping, use local port
+                lifetime_secs: 0,    // No NAT mapping lifetime
+                protocol: MappingProtocol::Direct, // New protocol type for HTTP-detected IPs
+                created_at_ms,
+            };
+
+            result.cgnat_detected = detect_cgnat(external_ip);
+            result.mapping = Some(mapping);
+
+            info!("Connectivity established via HTTP IP detection (direct mode, no NAT mapping)");
+            return result;
+        }
+        Err(e) => {
+            error!("HTTP IP detection failed: {}", e);
         }
     }
 

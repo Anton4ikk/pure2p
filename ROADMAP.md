@@ -2,7 +2,7 @@
 
 Development timeline and planned features.
 
-> **Quick Links**: [README](README.md) • [Development](DEVELOPMENT.md) • [Claude Docs](CLAUDE.md)
+> **Quick Links**: [README](README.md) • [Development](DEVELOPMENT.md) • [Usage Guide](USAGE.md)
 
 ---
 
@@ -152,4 +152,4 @@ Exploratory features for future consideration.
 
 - **[README.md](README.md)** — Overview and philosophy
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** — Architecture and build
-- **[CLAUDE.md](CLAUDE.md)** — Implementation details
+- **[USAGE.md](USAGE.md)** — Implementation details

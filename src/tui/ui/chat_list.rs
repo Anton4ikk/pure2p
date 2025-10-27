@@ -127,7 +127,7 @@ pub fn render_chat_list(f: &mut Frame, app: &App) {
         f.render_widget(status_widget, chunks[2]);
 
         // Help text
-        let help_text = "↑↓/j/k: Navigate | Enter: Open | d/Del: Delete | b/Esc: Back | q: Quit";
+        let help_text = "↑↓/j/k: Navigate | Enter: Open | d/Del: Delete | Esc: Back";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)

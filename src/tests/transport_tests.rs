@@ -401,7 +401,7 @@ async fn test_ping_endpoint() {
     );
 
     // Send ping
-    let response = transport.send_ping(&contact).await.expect("Ping failed");
+    let response = transport.send_ping(&contact, "").await.expect("Ping failed");
 
     // Verify response
     assert_eq!(response.uid, "server_uid_789");
@@ -435,7 +435,7 @@ async fn test_ping_unknown_uid() {
     );
 
     // Send ping
-    let response = transport.send_ping(&contact).await.expect("Ping failed");
+    let response = transport.send_ping(&contact, "").await.expect("Ping failed");
 
     // Should respond with "unknown" since UID wasn't set
     assert_eq!(response.uid, "unknown");
@@ -459,7 +459,7 @@ async fn test_ping_unreachable_peer() {
     );
 
     // Ping should fail
-    let result = transport.send_ping(&contact).await;
+    let result = transport.send_ping(&contact, "").await;
     assert!(result.is_err());
 }
 
@@ -502,11 +502,11 @@ async fn test_ping_multiple_peers() {
     );
 
     // Ping from transport1 to transport2
-    let response = transport1.send_ping(&contact2).await.expect("Ping to peer2 failed");
+    let response = transport1.send_ping(&contact2, "").await.expect("Ping to peer2 failed");
     assert_eq!(response.uid, "peer2_uid");
 
     // Ping from transport2 to transport1
-    let response = transport2.send_ping(&contact1).await.expect("Ping to peer1 failed");
+    let response = transport2.send_ping(&contact1, "").await.expect("Ping to peer1 failed");
     assert_eq!(response.uid, "peer1_uid");
 }
 

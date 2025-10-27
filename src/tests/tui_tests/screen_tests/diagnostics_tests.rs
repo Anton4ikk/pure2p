@@ -246,3 +246,117 @@ fn test_diagnostics_screen_no_active_mapping() {
     assert!(screen.get_remaining_lifetime_secs().is_none());
     assert!(screen.get_renewal_countdown_secs().is_none());
 }
+
+#[test]
+fn test_diagnostics_screen_http_fallback_success() {
+    let mut screen = DiagnosticsScreen::new(8080);
+
+    // Create HTTP fallback mapping (protocol: Direct)
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        external_port: 8080,
+        lifetime_secs: 0, // HTTP fallback has no lifetime
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.pcp = StrategyAttempt::Failed("No gateway".to_string());
+    result.natpmp = StrategyAttempt::Failed("No gateway".to_string());
+    result.upnp = StrategyAttempt::Failed("No devices found".to_string());
+    result.mapping = Some(mapping.clone());
+
+    screen.update_from_connectivity_result(&result);
+
+    // Verify HTTP fallback status is set
+    assert!(screen.http_fallback_status.is_some(), "HTTP fallback status should be set");
+
+    if let Some(Ok(http_mapping)) = &screen.http_fallback_status {
+        assert_eq!(http_mapping.external_ip, IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)));
+        assert_eq!(http_mapping.protocol, MappingProtocol::Direct);
+    } else {
+        panic!("Expected HTTP fallback success status");
+    }
+
+    // Verify other protocols failed
+    assert!(screen.pcp_status.as_ref().unwrap().is_err());
+    assert!(screen.natpmp_status.as_ref().unwrap().is_err());
+    assert!(screen.upnp_status.as_ref().unwrap().is_err());
+}
+
+#[test]
+fn test_diagnostics_screen_http_fallback_failure() {
+    let mut screen = DiagnosticsScreen::new(8080);
+
+    // All protocols including HTTP fallback failed
+    let mut result = ConnectivityResult::new();
+    result.pcp = StrategyAttempt::Failed("No gateway".to_string());
+    result.natpmp = StrategyAttempt::Failed("No gateway".to_string());
+    result.upnp = StrategyAttempt::Failed("No devices found".to_string());
+    result.mapping = None; // No mapping at all
+
+    screen.update_from_connectivity_result(&result);
+
+    // Verify HTTP fallback status is set to error
+    assert!(screen.http_fallback_status.is_some(), "HTTP fallback status should be set");
+
+    if let Some(Err(error)) = &screen.http_fallback_status {
+        assert!(error.contains("No external IP detected"));
+    } else {
+        panic!("Expected HTTP fallback error status");
+    }
+}
+
+#[test]
+fn test_diagnostics_screen_pcp_success_no_http_fallback() {
+    let mut screen = DiagnosticsScreen::new(8080);
+
+    // PCP succeeded, no need for HTTP fallback
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        external_port: 60000,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::PCP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.pcp = StrategyAttempt::Success(mapping.clone());
+    result.mapping = Some(mapping);
+
+    screen.update_from_connectivity_result(&result);
+
+    // Verify HTTP fallback is NOT set (wasn't needed)
+    assert!(screen.http_fallback_status.is_none(), "HTTP fallback should not be set when NAT traversal succeeds");
+
+    // Verify PCP succeeded
+    assert!(screen.pcp_status.as_ref().unwrap().is_ok());
+}
+
+#[test]
+fn test_diagnostics_screen_http_fallback_field_initialized() {
+    let screen = DiagnosticsScreen::new(8080);
+
+    // Verify new field is initialized to None
+    assert!(screen.http_fallback_status.is_none(), "HTTP fallback status should be None initially");
+}
+
+#[test]
+fn test_diagnostics_screen_set_http_fallback_status() {
+    let mut screen = DiagnosticsScreen::new(8080);
+
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        external_port: 8080,
+        lifetime_secs: 0,
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    // Test setter method
+    screen.set_http_fallback_status(Ok(mapping.clone()));
+
+    assert!(screen.http_fallback_status.is_some());
+    assert!(screen.http_fallback_status.as_ref().unwrap().is_ok());
+    assert!(!screen.is_refreshing, "Should stop refreshing after HTTP fallback");
+}

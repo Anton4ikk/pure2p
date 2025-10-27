@@ -10,7 +10,7 @@
 
 *Direct peer-to-peer messaging with radical honesty about trade-offs.*
 
-[Quick Start](#-quick-start) • [How It Works](#-how-it-works) • [Status](#-status) • [Docs](DEVELOPMENT.md)
+[Quick Start](#-quick-start) • [Usage Guide](USAGE.md) • [How It Works](#-how-it-works) • [Status](#-status) • [Docs](DEVELOPMENT.md)
 
 </div>
 
@@ -43,7 +43,7 @@ A **radically honest P2P messenger** that prioritizes privacy over convenience.
 
 ```bash
 # Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source "$HOME/.cargo/env" && rustup toolchain install 1.90.0 && rustup default 1.90.0
 
 # Build and run
 git clone https://github.com/Anton4ikk/pure2p.git
@@ -51,7 +51,16 @@ cd pure2p
 cargo run --bin pure2p-tui
 ```
 
-**Navigate:** ↑↓ or j/k | **Select:** Enter | **Back:** b/Esc | **Quit:** q
+**Navigate:** ↑↓ or j/k | **Select:** Enter | **Back:** Esc | **Quit:** q (main menu only)
+
+### First Time Setup
+
+1. **Wait for connectivity**: Yellow banner appears while network setup runs (IPv6 → PCP → NAT-PMP → UPnP)
+2. **Share your contact**: Press `s` → copy token → send via any channel (email, chat, etc.)
+3. **Import their contact**: Press `i` → paste token → Enter
+4. **Automatic exchange**: Your app sends ping with your token → they auto-import you → chat goes from ⌛ Pending to ● Active
+
+**Full guide:** See [USAGE.md](USAGE.md) for detailed instructions, troubleshooting, and status indicators.
 
 ---
 
@@ -183,7 +192,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for setup.
 
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Setup, architecture, API
 - **[ROADMAP.md](ROADMAP.md)** - Version timeline
-- **[CLAUDE.md](CLAUDE.md)** - Implementation notes
+- **[USAGE.md](USAGE.md)** - Implementation notes
 
 ---
 

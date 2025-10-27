@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.start_transport()?;
 
     // Trigger background connectivity diagnostics on startup
+    // (retry worker will start automatically after connectivity is established)
     app.trigger_startup_connectivity();
 
     // Run main loop
@@ -63,22 +64,10 @@ fn run_app<B: ratatui::backend::Backend>(
         terminal.draw(|f| ui(f, app))?;
 
         // Poll for startup connectivity completion (runs in background on all screens)
+        // When connectivity completes, retry worker will start automatically
         // BUT: skip if on Diagnostics screen, since poll_diagnostics_result() handles it
         if app.connectivity_result.is_none() && app.current_screen != Screen::Diagnostics {
             app.poll_startup_connectivity();
-        }
-
-        // Handle startup sync screen updates
-        if app.current_screen == Screen::StartupSync {
-            app.update_startup_sync();
-
-            // Check if sync is complete
-            if let Some(sync) = &app.startup_sync_screen {
-                if sync.is_complete {
-                    // Wait a moment to show final stats
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                }
-            }
         }
 
         // Poll for diagnostics refresh completion
@@ -90,19 +79,6 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 match app.current_screen {
-                    Screen::StartupSync => {
-                        match key.code {
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                // Allow user to skip or dismiss when complete
-                                if let Some(sync) = &app.startup_sync_screen {
-                                    if sync.is_complete {
-                                        app.complete_startup_sync();
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
                     Screen::MainMenu => {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {

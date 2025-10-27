@@ -7,8 +7,10 @@ pub mod types;
 pub mod screens;
 pub mod app;
 pub mod ui;
+pub mod clipboard;
 
 // Re-export main types for convenience
 pub use types::{Screen, MenuItem};
 pub use screens::*;
 pub use app::App;
+pub use clipboard::{ClipboardProvider, RealClipboard};

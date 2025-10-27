@@ -2,8 +2,7 @@
 
 Setup instructions for Pure2P development.
 
-> **Quick Links**: [README](README.md) • [Roadmap](ROADMAP.md) • [Claude Docs](CLAUDE.md)
-
+> **Quick Links**: [README](README.md) • [Usage Guide](USAGE.md) • [Roadmap](ROADMAP.md)
 ---
 
 ## Quick Start
@@ -50,34 +49,35 @@ src/
 ├── transport.rs        # HTTP server/client
 ├── queue.rs            # SQLite retry queue
 ├── messaging.rs        # High-level API
-├── storage/            # Persistent data (modular)
+├── storage/            # SQLite-based persistent storage
 │   ├── mod.rs          # Public API, re-exports
 │   ├── contact.rs      # Contact struct, signed token generation/verification
 │   ├── message.rs      # Message struct, delivery status tracking
 │   ├── chat.rs         # Chat conversation management
 │   ├── settings.rs     # Settings struct
-│   ├── settings_manager.rs # Thread-safe SettingsManager (Arc<RwLock>)
-│   ├── app_state.rs    # AppState persistence (JSON) - single file database
-│   └── storage_db.rs   # Low-level SQLite storage (unimplemented)
+│   ├── settings_manager.rs # Thread-safe SettingsManager (legacy, unused in TUI)
+│   ├── app_state.rs    # AppState with SQLite persistence methods
+│   └── storage_db.rs   # SQLite storage backend (schema + CRUD)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
-│   ├── types.rs        # Common types (PortMappingResult, MappingError, etc.)
+│   ├── types.rs        # Common types (PortMappingResult, MappingProtocol, MappingError, etc.)
 │   ├── gateway.rs      # Cross-platform gateway discovery
 │   ├── pcp.rs          # PCP (Port Control Protocol, RFC 6887)
 │   ├── natpmp.rs       # NAT-PMP (RFC 6886)
 │   ├── upnp.rs         # UPnP IGD implementation
 │   ├── ipv6.rs         # IPv6 direct connectivity detection
+│   ├── http_ip.rs      # HTTP-based external IP detection (fallback)
 │   ├── cgnat.rs        # CGNAT detection (RFC 6598, 100.64.0.0/10)
-│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP
+│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP→HTTP
 │   └── manager.rs      # PortMappingManager, UpnpMappingManager
 ├── tui/                # TUI module (library)
 │   ├── mod.rs          # Module exports
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
-│   ├── app.rs          # App business logic with automatic background connectivity
-│   └── ui/             # Modular rendering (9 files - consent screen removed)
+│   ├── app.rs          # App business logic with automatic background connectivity and retry worker
+│   ├── clipboard.rs    # Clipboard abstraction (ClipboardProvider trait, RealClipboard, MockClipboard)
+│   └── ui/             # Modular rendering (8 files - StartupSync screen removed)
 │       ├── mod.rs      # Main ui() dispatcher
-│       ├── startup_sync.rs
 │       ├── main_menu.rs
 │       ├── share_contact.rs
 │       ├── import_contact.rs
@@ -86,7 +86,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (373 tests)
+├── tests/              # Unit tests (395 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -95,30 +95,37 @@ src/
 │   ├── messaging_tests.rs
 │   ├── connectivity_tests.rs  # Includes CGNAT detection
 │   ├── lib_tests.rs
-│   ├── storage_tests/  # Storage module tests (56 tests)
+│   ├── storage_tests/  # Storage module tests (66 tests)
 │   │   ├── mod.rs
 │   │   ├── contact_tests.rs
 │   │   ├── token_tests.rs
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (122 tests)
+│   └── tui_tests/      # TUI module tests (128 tests)
 │       ├── mod.rs
-│       ├── app_tests.rs
-│       ├── screen_tests/     # Modularized screen tests (75 tests - consent removed)
+│       ├── app_tests/        # Modularized app tests (42 tests)
+│       │   ├── mod.rs
+│       │   ├── helpers.rs
+│       │   ├── initialization_tests.rs
+│       │   ├── navigation_tests.rs
+│       │   ├── contact_import_tests.rs
+│       │   ├── chat_management_tests.rs
+│       │   ├── messaging_tests.rs
+│       │   └── startup_tests.rs
+│       ├── screen_tests/     # Modularized screen tests (84 tests)
 │       │   ├── mod.rs
 │       │   ├── share_contact_tests.rs
 │       │   ├── import_contact_tests.rs
 │       │   ├── chat_list_tests.rs
 │       │   ├── chat_view_tests.rs
 │       │   ├── settings_tests.rs
-│       │   ├── startup_sync_tests.rs
 │       │   ├── diagnostics_tests.rs
 │       │   └── status_indicators_tests.rs
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
-    └── tui.rs          # TUI binary (thin wrapper, starts transport server, triggers auto-connectivity)
+    └── tui.rs          # TUI binary (thin wrapper, starts transport server, triggers connectivity, retry worker starts after connectivity)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.
@@ -134,7 +141,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (373 total)
+cargo test                     # All tests (395 total)
 
 # Quality
 cargo fmt                      # Format
@@ -181,24 +188,30 @@ src/tests/
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
-├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
+├── connectivity_tests.rs (38 tests)  - PCP, NAT-PMP, UPnP, IPv6, HTTP IP detection, CGNAT detection
 ├── lib_tests.rs          (1 test)    - Library init
-├── storage_tests/        (56 tests)  - Organized by storage module
+├── storage_tests/        (66 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
 │   ├── token_tests.rs    (16 tests)  - Token generation/parsing, signature verification
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
-│   ├── app_state_tests.rs (11 tests) - AppState save/load, sync
+│   ├── app_state_tests.rs (21 tests) - AppState JSON/CBOR + SQLite (save/load, messages, updates, migration)
 │   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (122 tests) - Organized by TUI components
-    ├── app_tests.rs      (35 tests)  - App business logic, self-import prevention
-    ├── screen_tests/     (76 tests)  - Modularized by screen type
-    │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
-    │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
+└── tui_tests/            (128 tests) - Organized by TUI components
+    ├── app_tests/        (42 tests)  - Modularized by feature area
+    │   ├── helpers.rs                - Shared test utilities
+    │   ├── initialization_tests.rs   (6 tests)   - App creation, state loading, settings
+    │   ├── navigation_tests.rs       (14 tests)  - Screen transitions, menu navigation
+    │   ├── contact_import_tests.rs   (3 tests)   - Import validation, duplicate detection, self-import prevention
+    │   ├── chat_management_tests.rs  (14 tests)  - Chat creation, deletion, selection
+    │   ├── messaging_tests.rs        (3 tests)   - Message sending
+    │   └── startup_tests.rs          (2 tests)   - Startup screen, connectivity
+    ├── screen_tests/     (84 tests)  - Modularized by screen type
+    │   ├── share_contact_tests.rs    (8 tests)   - ShareContactScreen (token generation, file save, clipboard mocking)
+    │   ├── import_contact_tests.rs   (13 tests)  - ImportContactScreen (parsing, validation, clipboard mocking)
     │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen
     │   ├── chat_view_tests.rs        (3 tests)   - ChatViewScreen
     │   ├── settings_tests.rs         (10 tests)  - SettingsScreen
-    │   ├── startup_sync_tests.rs     (10 tests)  - StartupSyncScreen
-    │   ├── diagnostics_tests.rs      (20 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT)
+    │   ├── diagnostics_tests.rs      (25 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT, HTTP fallback)
     │   └── status_indicators_tests.rs (10 tests) - Status badges and contact expiry
     ├── types_tests.rs    (3 tests)   - MenuItem enum
     └── ui_tests.rs       (4 tests)   - UI helper functions (format_duration_until)
@@ -208,13 +221,14 @@ src/tests/
 ```bash
 cargo test --lib                        # All library tests
 cargo test crypto_tests                 # Crypto tests
-cargo test storage_tests                # All storage tests
-cargo test tui_tests                    # All TUI tests
-cargo test storage_tests::contact       # Just contact tests
-cargo test tui_tests::app               # Just app tests
-cargo test tui_tests::screen_tests      # All screen tests
-cargo test screen_tests::diagnostics    # Just diagnostics tests
+cargo test share_contact_tests          # Clipboard tests (mocked)
 ```
+
+**Testing Philosophy:**
+- **Clipboard Abstraction**: Trait-based `ClipboardProvider` allows mocking clipboard operations in tests
+- **MockClipboard**: Thread-safe mock implementation for testing without real clipboard access
+- **Graceful Degradation**: Tests verify user-friendly error messages when clipboard unavailable (e.g., SSH)
+- **No External Dependencies**: Tests use mocks to avoid race conditions and platform-specific clipboard issues
 
 ---
 
@@ -272,6 +286,26 @@ sudo apt-get install pkg-config libssl-dev
 - Check SQLite locks: `rm -rf target/` and rebuild
 - Use `-- --test-threads=1` to run sequentially
 
+**Contact token invalid after restart:**
+- App now intelligently reuses the same port when on the same network
+- Port only changes when your external IP changes (different network)
+- Check diagnostics screen (press `n`) to verify external IP:port
+- If you need to force a new port, delete `./app_data/pure2p.db`
+
+**Diagnostics shows 127.0.0.1 instead of public IP:**
+- All port mapping protocols (PCP/NAT-PMP/UPnP) may fail in VM or restricted environments
+- App automatically falls back to HTTP IP detection (queries api.ipify.org, ifconfig.me, etc.)
+- This detects your actual public IP without port mapping
+- Requires internet access to reach public IP detection services
+- If HTTP detection also fails, check firewall/proxy settings
+
+**Chat stuck in ⌛ Pending status:**
+- Chat becomes Active (●) only when ping response is received
+- If contact is offline/unreachable, chat stays Pending until they come online
+- Retry worker automatically keeps trying to ping them
+- Chat will auto-transition to Active when ping finally succeeds
+- Check queue size in diagnostics (press `n`) to see pending messages
+
 ---
 
 ## Contributing
@@ -284,15 +318,20 @@ sudo apt-get install pkg-config libssl-dev
 
 **Must maintain:**
 - Direct P2P only (no servers/relays)
-- Local-only storage (single `app_state.json` file in project root)
+- Local-only storage (SQLite databases in `./app_data/`)
 - Transparency about limitations
 
-**Note on app_state.json:**
-- Created automatically on first run with default settings
-- Stores all application data (contacts, chats, messages, settings)
-- Auto-saved after every state change
-- Tests use isolated temp directories to avoid polluting production data
-- Safe to delete for full reset (will recreate with defaults)
+**Storage Architecture:**
+- **Production**: `./app_data/pure2p.db` (all app data) + `./app_data/message_queue.db` (retry queue)
+- **Tests**: In-memory SQLite databases (no filesystem pollution)
+- **Migration**: Legacy `app_state.json` auto-migrated to SQLite on first run (backed up as `.json.bak`)
+- **Data**: User identity (keypair, UID), contacts, chats, messages, settings, network info (IP, port)
+- **Auto-save**: State saved to SQLite after every modification
+- **Concurrent access**: Transport handlers create separate connections to same database file
+- **State reload**: App reloads from DB when navigating to pick up incoming messages
+- **Port persistence**: Smart port selection reuses saved port when IP unchanged (maintains contact token validity across restarts)
+- **Chat status**: Chats marked as Active only when ping response received (confirms two-way connectivity)
+- Safe to delete `./app_data/` for full reset (will recreate with defaults)
 
 See [ROADMAP.md](ROADMAP.md#-contributing) for details.
 
@@ -301,5 +340,5 @@ See [ROADMAP.md](ROADMAP.md#-contributing) for details.
 ## Related Docs
 
 - **[README.md](README.md)** — Overview and quick start
+- **[USAGE.md](USAGE.md)** — User guide and troubleshooting
 - **[ROADMAP.md](ROADMAP.md)** — Version timeline
-- **[CLAUDE.md](CLAUDE.md)** — Implementation details

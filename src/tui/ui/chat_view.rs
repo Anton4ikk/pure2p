@@ -140,7 +140,7 @@ pub fn render_chat_view(f: &mut Frame, app: &App) {
             let help_text = if let Some(status) = &screen.status_message {
                 status.clone()
             } else {
-                "Enter: Send | PgUp/PgDn: Scroll | b/Esc: Back to Chat List | q: Quit".to_string()
+                "Enter: Send | PgUp/PgDn: Scroll | Esc: Back to Chat List".to_string()
             };
             let help = Paragraph::new(help_text)
                 .style(Style::default().fg(Color::DarkGray))

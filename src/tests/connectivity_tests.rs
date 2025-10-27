@@ -2,6 +2,7 @@ use crate::connectivity::*;
 use crate::connectivity::pcp::{PcpResultCode, PcpOpcode, build_pcp_map_request, parse_pcp_ip_address, PCP_VERSION};
 use crate::connectivity::natpmp::{NatPmpResultCode, NatPmpOpcode, build_natpmp_map_request, parse_natpmp_map_response, NATPMP_VERSION};
 use crate::connectivity::ipv6::is_ipv6_link_local;
+use chrono::Utc;
 use std::net::{IpAddr, Ipv4Addr};
 
 #[test]
@@ -483,4 +484,148 @@ fn test_connectivity_result_with_cgnat_serialization() {
 
     assert_eq!(result.cgnat_detected, deserialized.cgnat_detected);
     assert!(deserialized.cgnat_detected, "CGNAT detection should survive serialization");
+}
+
+// ========================================================================
+// HTTP IP Detection Tests
+// ========================================================================
+
+#[test]
+fn test_mapping_protocol_direct_variant() {
+    // Test that the Direct protocol variant exists and can be serialized
+    let protocol = MappingProtocol::Direct;
+
+    // Test JSON serialization
+    let json = serde_json::to_string(&protocol).unwrap();
+    let deserialized: MappingProtocol = serde_json::from_str(&json).unwrap();
+    assert_eq!(protocol, deserialized);
+}
+
+#[test]
+fn test_port_mapping_result_with_direct_protocol() {
+    // Test creating a PortMappingResult with Direct protocol
+    let result = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 42)),
+        external_port: 50123,
+        lifetime_secs: 0, // No lifetime for direct connections
+        protocol: MappingProtocol::Direct,
+        created_at_ms: 1234567890000,
+    };
+
+    assert_eq!(result.protocol, MappingProtocol::Direct);
+    assert_eq!(result.lifetime_secs, 0);
+    assert!(result.external_ip.is_ipv4());
+
+    // Test JSON serialization
+    let json = serde_json::to_string(&result).unwrap();
+    let deserialized: PortMappingResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(result, deserialized);
+}
+
+#[test]
+fn test_connectivity_result_with_direct_mapping() {
+    // Simulate a scenario where all NAT traversal fails but HTTP detection succeeds
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 42)),
+        external_port: 8080,
+        lifetime_secs: 0,
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.ipv6 = StrategyAttempt::Failed("Not supported".to_string());
+    result.pcp = StrategyAttempt::Failed("Mapping request timed out".to_string());
+    result.natpmp = StrategyAttempt::Failed("Mapping request timed out".to_string());
+    result.upnp = StrategyAttempt::Failed("No gateway found".to_string());
+    result.mapping = Some(mapping);
+    result.cgnat_detected = false;
+
+    // Should still be considered successful
+    assert!(result.is_success());
+    assert!(result.mapping.is_some());
+
+    let final_mapping = result.mapping.unwrap();
+    assert_eq!(final_mapping.protocol, MappingProtocol::Direct);
+    assert_eq!(final_mapping.external_ip, IpAddr::V4(Ipv4Addr::new(203, 0, 113, 42)));
+}
+
+#[test]
+fn test_connectivity_result_summary_with_direct_fallback() {
+    // Test that summary string properly represents HTTP fallback scenario
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        external_port: 8080,
+        lifetime_secs: 0,
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.ipv6 = StrategyAttempt::Failed("Not supported".to_string());
+    result.pcp = StrategyAttempt::Failed("Timeout".to_string());
+    result.natpmp = StrategyAttempt::Failed("Timeout".to_string());
+    result.upnp = StrategyAttempt::Failed("No gateway".to_string());
+    result.mapping = Some(mapping);
+
+    let summary = result.summary();
+
+    // Summary should show all failed attempts
+    assert!(summary.contains("IPv6:"));
+    assert!(summary.contains("PCP:"));
+    assert!(summary.contains("NAT-PMP:"));
+    assert!(summary.contains("UPnP:"));
+}
+
+#[tokio::test]
+#[ignore] // Requires internet connectivity
+async fn test_http_ip_detection_integration() {
+    // Integration test for HTTP IP detection
+    // This test is ignored by default since it requires internet access
+    use crate::connectivity::detect_external_ip;
+
+    let result = detect_external_ip().await;
+
+    // If we have internet, this should succeed
+    if let Ok(ip) = result {
+        println!("Detected external IP via HTTP: {}", ip);
+        // The IP should be either IPv4 or IPv6
+        assert!(ip.is_ipv4() || ip.is_ipv6());
+    } else {
+        println!("HTTP IP detection failed (expected without internet)");
+    }
+}
+
+#[test]
+fn test_direct_mapping_zero_lifetime() {
+    // Direct mappings should always have zero lifetime since there's no NAT renewal
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+        external_port: 9999,
+        lifetime_secs: 0,
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    assert_eq!(mapping.lifetime_secs, 0, "Direct protocol should have zero lifetime");
+}
+
+#[test]
+fn test_all_mapping_protocols_unique() {
+    // Ensure all protocol variants are distinct
+    let protocols = vec![
+        MappingProtocol::PCP,
+        MappingProtocol::NATPMP,
+        MappingProtocol::UPnP,
+        MappingProtocol::IPv6,
+        MappingProtocol::Direct,
+        MappingProtocol::Manual,
+    ];
+
+    // Test that serialization produces unique strings
+    let mut serialized = std::collections::HashSet::new();
+    for protocol in protocols {
+        let json = serde_json::to_string(&protocol).unwrap();
+        assert!(serialized.insert(json), "Each protocol should serialize uniquely");
+    }
 }

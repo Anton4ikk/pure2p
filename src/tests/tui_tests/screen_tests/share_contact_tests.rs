@@ -161,3 +161,85 @@ fn test_different_keypairs_different_tokens() {
         "Different keypairs should generate different tokens"
     );
 }
+
+#[test]
+fn test_copy_to_clipboard_graceful_degradation() {
+    use crate::tui::clipboard::mock::MockClipboard;
+
+    // Test that clipboard errors are handled gracefully (especially for SSH)
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let local_ip = "192.168.1.100:8080";
+
+    let mut screen = ShareContactScreen::new(&keypair, local_ip);
+
+    // Test with failing clipboard (simulates SSH environment)
+    let mock_clipboard = MockClipboard::new_failing();
+    screen.copy_to_clipboard_with_provider(&mut Ok(mock_clipboard));
+
+    // Should have error message
+    assert!(
+        screen.status_message.is_some(),
+        "Status message should be set after copy attempt"
+    );
+
+    let status = screen.status_message.as_ref().unwrap();
+
+    // Should mention using 's' to save to file
+    assert!(
+        status.to_lowercase().contains("save") || status.contains("'s'"),
+        "Error message should suggest alternative (save to file): {}",
+        status
+    );
+}
+
+#[test]
+fn test_clipboard_error_messages_helpful() {
+    use crate::tui::clipboard::mock::MockClipboard;
+
+    // Verify error messages are user-friendly and actionable
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let local_ip = "192.168.1.100:8080";
+
+    let mut screen = ShareContactScreen::new(&keypair, local_ip);
+
+    // Test with failing clipboard
+    let mock_clipboard = MockClipboard::new_failing();
+    screen.copy_to_clipboard_with_provider(&mut Ok(mock_clipboard));
+
+    if let Some(status) = &screen.status_message {
+        // Messages should not contain technical jargon like "X11 server connection"
+        // Instead, should be user-friendly like "Clipboard not available over SSH"
+        if status.contains("error") || status.contains("failed") || status.contains("not available") {
+            assert!(
+                !status.contains("X11") && !status.contains("server connection"),
+                "Error messages should be user-friendly, not technical: {}",
+                status
+            );
+        }
+    }
+}
+
+#[test]
+fn test_copy_to_clipboard_success() {
+    use crate::tui::clipboard::mock::MockClipboard;
+
+    // Test successful clipboard copy
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let local_ip = "192.168.1.100:8080";
+
+    let mut screen = ShareContactScreen::new(&keypair, local_ip);
+    let token = screen.token.clone();
+
+    // Test with working mock clipboard
+    let mock_clipboard = MockClipboard::new();
+    screen.copy_to_clipboard_with_provider(&mut Ok(mock_clipboard.clone()));
+
+    // Should have success message
+    assert_eq!(
+        screen.status_message,
+        Some("Copied to clipboard!".to_string())
+    );
+
+    // Verify token was actually copied
+    assert_eq!(mock_clipboard.get_content(), Some(token));
+}
