@@ -52,6 +52,10 @@ pub struct App {
     pub queue: MessageQueue,
     /// SQLite storage backend
     storage: Storage,
+    /// Flag to signal retry worker to stop
+    retry_worker_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Background retry worker thread handle
+    retry_worker_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl App {
@@ -123,17 +127,9 @@ impl App {
             app_state.sync_pending_status(&pending_uids);
         }
 
-        // Check for pending messages in queue
-        let pending_count = queue.count_pending()?;
-
-        // Determine initial screen based on pending messages
-        let (current_screen, startup_sync_screen) = if pending_count > 0 {
-            // Has pending messages: show startup sync
-            (Screen::StartupSync, Some(StartupSyncScreen::new(pending_count)))
-        } else {
-            // Normal startup: show main menu
-            (Screen::MainMenu, None)
-        };
+        // Always start at main menu (retry worker handles queue silently in background)
+        let current_screen = Screen::MainMenu;
+        let startup_sync_screen = None;
 
         let app = Self {
             current_screen,
@@ -157,6 +153,8 @@ impl App {
             transport,
             queue,
             storage,
+            retry_worker_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            retry_worker_handle: None,
         };
 
         // Save initial state on first run
@@ -360,6 +358,13 @@ impl App {
                         if let Some(mapping) = &result.mapping {
                             let detected_ip = format!("{}:{}", mapping.external_ip, mapping.external_port);
                             self.local_ip = detected_ip.clone();
+
+                            // Start retry worker now that connectivity is established
+                            if self.retry_worker_handle.is_none() {
+                                if let Err(e) = self.start_retry_worker() {
+                                    tracing::error!("Failed to start retry worker: {}", e);
+                                }
+                            }
 
                             // Save detected IP and port to app_state for persistence
                             self.app_state.user_ip = Some(detected_ip);
@@ -922,9 +927,304 @@ impl App {
         }
     }
 
+    /// Start background retry worker
+    ///
+    /// This spawns a background thread that periodically processes the message queue
+    /// based on the retry interval configured in settings.
+    ///
+    /// The worker:
+    /// 1. Immediately retries all pending messages on startup
+    /// 2. Then periodically checks for messages where next_retry <= now
+    /// 3. Attempts delivery for each (handles both "ping" and "text" types)
+    /// 4. Updates queue status appropriately (success/failure)
+    pub fn start_retry_worker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Don't start if already running
+        if self.retry_worker_handle.is_some() {
+            return Ok(());
+        }
+
+        let transport = self.transport.clone();
+        let queue_path = if self.state_path.contains("test") || self.state_path.contains("tmp") {
+            std::path::Path::new(&self.state_path)
+                .parent()
+                .and_then(|p| p.to_str())
+                .map(|p| format!("{}/message_queue.db", p))
+                .unwrap_or_else(|| "message_queue.db".to_string())
+        } else {
+            "./app_data/message_queue.db".to_string()
+        };
+        let storage_path = self.state_path.clone();
+        let stop_flag = self.retry_worker_stop.clone();
+        let retry_interval_ms = self.app_state.settings.get_global_retry_interval_ms();
+
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(async move {
+                // Create queue instance for this worker thread
+                let mut queue = match MessageQueue::new_with_path(&queue_path) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        tracing::error!("Retry worker: Failed to create queue: {}", e);
+                        return;
+                    }
+                };
+
+                // Create storage instance for this worker thread
+                let storage = if storage_path.contains("test") || storage_path.contains("tmp") {
+                    match Storage::new_in_memory() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("Retry worker: Failed to create storage: {}", e);
+                            return;
+                        }
+                    }
+                } else {
+                    match Storage::new_with_default_path() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("Retry worker: Failed to create storage: {}", e);
+                            return;
+                        }
+                    }
+                };
+
+                tracing::info!("Retry worker started with {}ms interval", retry_interval_ms);
+
+                // PHASE 1: Startup - immediately retry ALL pending messages
+                tracing::info!("Retry worker: Starting initial retry of all pending messages");
+                match queue.fetch_all_pending() {
+                    Ok(pending_messages) => {
+                        let count = pending_messages.len();
+                        if count > 0 {
+                            tracing::info!("Retry worker: Found {} pending messages to retry on startup", count);
+                            let mut succeeded = 0;
+                            let mut failed = 0;
+
+                            for queued_msg in pending_messages {
+                                if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                    tracing::info!("Retry worker: Stop signal received during startup");
+                                    return;
+                                }
+
+                                let message_id = queued_msg.message.id.clone();
+                                let target_uid = queued_msg.message.recipient.clone();
+
+                                // Get message type from queue (need to query separately)
+                                let message_type: String = match queue.conn.query_row(
+                                    "SELECT message_type FROM message_queue WHERE message_id = ?1",
+                                    [&message_id],
+                                    |row| row.get(0),
+                                ) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        tracing::error!("Failed to get message type for {}: {}", message_id, e);
+                                        continue;
+                                    }
+                                };
+
+                                // Get contact info from storage
+                                let contact = match AppState::load_from_db(&storage) {
+                                    Ok(app_state) => {
+                                        app_state.contacts.iter().find(|c| c.uid == target_uid).cloned()
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load app state for message {}: {}", message_id, e);
+                                        None
+                                    }
+                                };
+
+                                let contact = match contact {
+                                    Some(c) => c,
+                                    None => {
+                                        tracing::warn!("Contact {} not found for message {}, marking as failed", target_uid, message_id);
+                                        let _ = queue.mark_failed(&message_id);
+                                        failed += 1;
+                                        continue;
+                                    }
+                                };
+
+                                // Attempt delivery based on message type
+                                let result = if message_type == "ping" {
+                                    // For ping, content is the contact token
+                                    let token = String::from_utf8_lossy(&queued_msg.message.content).to_string();
+                                    transport.send_ping(&contact, &token).await
+                                        .map(|_| ())
+                                        .map_err(|e| crate::Error::Transport(e.to_string()))
+                                } else {
+                                    // For text messages, send normally
+                                    transport.send_message(
+                                        &contact,
+                                        &queued_msg.message.sender,
+                                        "text",
+                                        queued_msg.message.content.clone(),
+                                    ).await
+                                        .map_err(|e| crate::Error::Transport(e.to_string()))
+                                };
+
+                                match result {
+                                    Ok(()) => {
+                                        if let Err(e) = queue.mark_success(&message_id) {
+                                            tracing::error!("Failed to mark message {} as delivered: {}", message_id, e);
+                                        } else {
+                                            succeeded += 1;
+                                            tracing::info!("Retry worker: {} delivered successfully to {}", message_type, target_uid);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Retry worker: Failed to deliver {} to {}: {}", message_type, target_uid, e);
+                                        if let Err(e) = queue.mark_failed(&message_id) {
+                                            tracing::error!("Failed to update retry status for {}: {}", message_id, e);
+                                        }
+                                        failed += 1;
+                                    }
+                                }
+                            }
+
+                            tracing::info!("Retry worker: Startup retry complete - {} succeeded, {} failed", succeeded, failed);
+                        } else {
+                            tracing::info!("Retry worker: No pending messages on startup");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Retry worker: Failed to fetch pending messages: {}", e);
+                    }
+                }
+
+                // PHASE 2: Periodic retry loop
+                tracing::info!("Retry worker: Entering periodic retry loop");
+
+                loop {
+                    // Sleep for retry interval (check stop flag every 100ms)
+                    let sleep_iterations = (retry_interval_ms / 100).max(1);
+                    for _ in 0..sleep_iterations {
+                        if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            tracing::info!("Retry worker: Stop signal received, exiting");
+                            return;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+
+                    // Fetch messages that are ready for retry (next_retry <= now)
+                    match queue.fetch_pending() {
+                        Ok(ready_messages) => {
+                            if ready_messages.is_empty() {
+                                continue;
+                            }
+
+                            tracing::info!("Retry worker: Processing {} messages ready for retry", ready_messages.len());
+
+                            for queued_msg in ready_messages {
+                                if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                    tracing::info!("Retry worker: Stop signal received during processing");
+                                    return;
+                                }
+
+                                let message_id = queued_msg.message.id.clone();
+                                let target_uid = queued_msg.message.recipient.clone();
+
+                                // Get message type
+                                let message_type: String = match queue.conn.query_row(
+                                    "SELECT message_type FROM message_queue WHERE message_id = ?1",
+                                    [&message_id],
+                                    |row| row.get(0),
+                                ) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        tracing::error!("Failed to get message type for {}: {}", message_id, e);
+                                        continue;
+                                    }
+                                };
+
+                                // Get contact info
+                                let contact = match AppState::load_from_db(&storage) {
+                                    Ok(app_state) => {
+                                        app_state.contacts.iter().find(|c| c.uid == target_uid).cloned()
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load app state: {}", e);
+                                        None
+                                    }
+                                };
+
+                                let contact = match contact {
+                                    Some(c) => c,
+                                    None => {
+                                        tracing::warn!("Contact {} not found, marking message as failed", target_uid);
+                                        let _ = queue.mark_failed(&message_id);
+                                        continue;
+                                    }
+                                };
+
+                                // Attempt delivery
+                                let result = if message_type == "ping" {
+                                    let token = String::from_utf8_lossy(&queued_msg.message.content).to_string();
+                                    transport.send_ping(&contact, &token).await
+                                        .map(|_| ())
+                                        .map_err(|e| crate::Error::Transport(e.to_string()))
+                                } else {
+                                    transport.send_message(
+                                        &contact,
+                                        &queued_msg.message.sender,
+                                        "text",
+                                        queued_msg.message.content.clone(),
+                                    ).await
+                                        .map_err(|e| crate::Error::Transport(e.to_string()))
+                                };
+
+                                match result {
+                                    Ok(()) => {
+                                        if let Err(e) = queue.mark_success(&message_id) {
+                                            tracing::error!("Failed to mark message as delivered: {}", e);
+                                        } else {
+                                            tracing::info!("Retry worker: {} delivered to {}", message_type, target_uid);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Retry worker: Failed to deliver {} to {}: {}", message_type, target_uid, e);
+                                        let _ = queue.mark_failed(&message_id);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Retry worker: Failed to fetch ready messages: {}", e);
+                        }
+                    }
+                }
+            });
+        });
+
+        self.retry_worker_handle = Some(handle);
+        tracing::info!("Retry worker thread started");
+        Ok(())
+    }
+
+    /// Stop the background retry worker
+    ///
+    /// Signals the worker to stop and waits for it to finish gracefully.
+    pub fn stop_retry_worker(&mut self) {
+        if self.retry_worker_handle.is_some() {
+            tracing::info!("Stopping retry worker...");
+            self.retry_worker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            if let Some(handle) = self.retry_worker_handle.take() {
+                // Wait for worker to finish (with timeout)
+                let _ = handle.join();
+                tracing::info!("Retry worker stopped");
+            }
+        }
+    }
+
     /// Get local IP address (simplified - returns localhost for now)
     fn get_local_ip() -> String {
         // TODO: Implement actual local IP detection
         "127.0.0.1:8080".to_string()
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Ensure retry worker is stopped when app is dropped
+        self.stop_retry_worker();
     }
 }

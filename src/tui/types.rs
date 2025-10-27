@@ -3,8 +3,6 @@
 /// Application screens
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Screen {
-    /// Initial sync screen showing pending message retry progress
-    StartupSync,
     /// Main menu for navigation
     MainMenu,
     /// Share contact token screen

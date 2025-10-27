@@ -15,6 +15,13 @@
    - Manually retry with `r` or `F5`
    - See CGNAT detection status
 
+## Every Launch
+
+1. **Network Setup**: Automatic connectivity detection (IPv6 → PCP → NAT-PMP → UPnP)
+2. **Queue Processing**: After network setup completes, all queued messages/pings are automatically retried
+3. **Background Retry**: Continues retrying failed deliveries every N minutes (configurable in Settings)
+
+
 ## Starting Your First Chat
 
 ### Option A: You Initiate Contact
