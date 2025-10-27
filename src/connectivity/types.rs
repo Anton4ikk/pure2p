@@ -30,6 +30,8 @@ pub enum MappingProtocol {
     UPnP,
     /// Direct IPv6 connectivity (no NAT)
     IPv6,
+    /// Direct connectivity via HTTP-detected IP (no NAT mapping)
+    Direct,
     /// Manual configuration (no automatic mapping)
     Manual,
 }

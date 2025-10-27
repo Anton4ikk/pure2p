@@ -60,14 +60,15 @@ src/
 │   └── storage_db.rs   # SQLite storage backend (schema + CRUD)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
-│   ├── types.rs        # Common types (PortMappingResult, MappingError, etc.)
+│   ├── types.rs        # Common types (PortMappingResult, MappingProtocol, MappingError, etc.)
 │   ├── gateway.rs      # Cross-platform gateway discovery
 │   ├── pcp.rs          # PCP (Port Control Protocol, RFC 6887)
 │   ├── natpmp.rs       # NAT-PMP (RFC 6886)
 │   ├── upnp.rs         # UPnP IGD implementation
 │   ├── ipv6.rs         # IPv6 direct connectivity detection
+│   ├── http_ip.rs      # HTTP-based external IP detection (fallback)
 │   ├── cgnat.rs        # CGNAT detection (RFC 6598, 100.64.0.0/10)
-│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP
+│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP→HTTP
 │   └── manager.rs      # PortMappingManager, UpnpMappingManager
 ├── tui/                # TUI module (library)
 │   ├── mod.rs          # Module exports
@@ -84,7 +85,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (379 tests)
+├── tests/              # Unit tests (387 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -139,7 +140,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (381 total)
+cargo test                     # All tests (387 total)
 
 # Quality
 cargo fmt                      # Format
@@ -186,7 +187,7 @@ src/tests/
 ├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
-├── connectivity_tests.rs (30 tests)  - PCP, NAT-PMP, UPnP, IPv6, CGNAT detection
+├── connectivity_tests.rs (38 tests)  - PCP, NAT-PMP, UPnP, IPv6, HTTP IP detection, CGNAT detection
 ├── lib_tests.rs          (1 test)    - Library init
 ├── storage_tests/        (66 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
@@ -282,6 +283,13 @@ sudo apt-get install pkg-config libssl-dev
 - Port only changes when your external IP changes (different network)
 - Check diagnostics screen (press `n`) to verify external IP:port
 - If you need to force a new port, delete `./app_data/pure2p.db`
+
+**Diagnostics shows 127.0.0.1 instead of public IP:**
+- All port mapping protocols (PCP/NAT-PMP/UPnP) may fail in VM or restricted environments
+- App automatically falls back to HTTP IP detection (queries api.ipify.org, ifconfig.me, etc.)
+- This detects your actual public IP without port mapping
+- Requires internet access to reach public IP detection services
+- If HTTP detection also fails, check firewall/proxy settings
 
 **Chat stuck in ⌛ Pending status:**
 - Chat becomes Active (●) only when ping response is received

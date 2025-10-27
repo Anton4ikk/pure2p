@@ -49,13 +49,14 @@ cargo fmt
 
 **`messaging`** - High-level API combining transport/queue/storage. Send with auto-queue, chat lifecycle, smart deletion
 
-**`connectivity`** - Modular NAT traversal system with IPv6 → PCP → NAT-PMP → UPnP orchestration:
+**`connectivity`** - Modular NAT traversal system with IPv6 → PCP → NAT-PMP → UPnP → HTTP IP detection orchestration:
 - `types.rs` - Common types (PortMappingResult, MappingProtocol, MappingError, ConnectivityResult, StrategyAttempt, IpProtocol)
 - `gateway.rs` - Cross-platform gateway discovery (Linux, macOS, Windows)
 - `pcp.rs` - PCP (Port Control Protocol, RFC 6887) implementation
 - `natpmp.rs` - NAT-PMP (RFC 6886) implementation
 - `upnp.rs` - UPnP IGD implementation
 - `ipv6.rs` - IPv6 direct connectivity detection
+- `http_ip.rs` - HTTP-based external IP detection (fallback when all NAT traversal fails)
 - `cgnat.rs` - CGNAT detection (RFC 6598, 100.64.0.0/10 range), private IP helpers
 - `orchestrator.rs` - Main `establish_connectivity()` function with automatic fallback
 - `manager.rs` - PortMappingManager (PCP auto-renewal), UpnpMappingManager (cleanup)
@@ -256,23 +257,25 @@ cargo fmt
 
 ### Connectivity
 
-**Module Architecture** (10 files, ~150-400 lines each):
-- `types.rs` - Shared types: PortMappingResult, MappingError, ConnectivityResult (with cgnat_detected field), StrategyAttempt, IpProtocol
+**Module Architecture** (11 files, ~90-400 lines each):
+- `types.rs` - Shared types: PortMappingResult, MappingProtocol (PCP/NATPMP/UPnP/IPv6/Direct/Manual), MappingError, ConnectivityResult (with cgnat_detected field), StrategyAttempt, IpProtocol
 - `gateway.rs` - Cross-platform gateway discovery (Linux/macOS/Windows)
 - `pcp.rs` - PCP implementation with PcpOpcode, PcpResultCode enums
 - `natpmp.rs` - NAT-PMP implementation with NatPmpOpcode, NatPmpResultCode enums
 - `upnp.rs` - UPnP IGD with blocking operations
 - `ipv6.rs` - IPv6 detection helpers (check_ipv6_connectivity, is_ipv6_link_local)
+- `http_ip.rs` - HTTP-based external IP detection using public services (api.ipify.org, ifconfig.me, icanhazip.com, checkip.amazonaws.com)
 - `cgnat.rs` - CGNAT detection: detect_cgnat(ip) checks 100.64.0.0/10 range, is_private_ip(ip) helper
 - `orchestrator.rs` - Main `establish_connectivity()` function
 - `manager.rs` - PortMappingManager (PCP), UpnpMappingManager (UPnP)
 - `mod.rs` - Public API with re-exports
 
 **Orchestrator Behavior**:
-- `establish_connectivity(port)` tries IPv6 → PCP → NAT-PMP → UPnP sequentially
+- `establish_connectivity(port)` tries IPv6 → PCP → NAT-PMP → UPnP → HTTP IP detection sequentially
 - Returns `ConnectivityResult` with full tracking of all attempts + CGNAT detection
 - Each protocol gets `StrategyAttempt`: NotAttempted | Success(mapping) | Failed(error)
 - Stops on first success, continues through all on failure
+- **HTTP fallback**: When all NAT traversal fails, queries public IP services to detect external IP (creates mapping with `protocol: Direct`, `lifetime_secs: 0`)
 - `result.summary()` generates UX string: "⚠️ CGNAT → IPv6: no → PCP: ok" (if CGNAT detected)
 - CGNAT detection runs automatically after each successful mapping
 - **Automatic on startup**: TUI triggers connectivity test in background thread on app launch
@@ -284,6 +287,7 @@ cargo fmt
 - **NAT-PMP** (RFC 6886): 12-byte requests, 16-byte responses, requires separate external IP request
 - **UPnP**: SSDP discovery + SOAP, blocking I/O spawned to tokio::task::spawn_blocking
 - **IPv6**: Binds to `[::]`, connects to public IPv6 (2001:4860:4860::8888) to verify global address
+- **HTTP IP Detection**: Queries public services (api.ipify.org, ifconfig.me, icanhazip.com, checkip.amazonaws.com) with 5s timeout, returns first successful IPv4/IPv6 detection
 - **CGNAT** (RFC 6598): Detects 100.64.0.0/10 range, warns user that relay is required for P2P
 
 **Lifecycle Management**:
@@ -294,7 +298,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (379 total tests)
+- All tests in `src/tests/` directory (387 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -306,7 +310,7 @@ cargo fmt
 - `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (30 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT
+- `connectivity_tests.rs` (38 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT, HTTP IP detection
 - `lib_tests.rs` (1 test) - Library initialization
 
 **`storage_tests/` (66 tests):**
@@ -341,7 +345,7 @@ cargo fmt
 
 ## Dependencies
 
-**Core:** `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `rusqlite`
+**Core:** `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `ring`, `serde`, `serde_cbor`, `chrono`, `tokio`, `hyper`, `reqwest`, `rusqlite`
 **TUI:** `ratatui`, `crossterm`, `arboard` (clipboard), `tempfile` (tests)
 
 ## Commit Style

@@ -43,7 +43,7 @@ A **radically honest P2P messenger** that prioritizes privacy over convenience.
 
 ```bash
 # Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source "$HOME/.cargo/env" && rustup toolchain install 1.90.0 && rustup default 1.90.0
 
 # Build and run
 git clone https://github.com/Anton4ikk/pure2p.git
