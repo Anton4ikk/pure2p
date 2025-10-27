@@ -14,15 +14,21 @@ use std::path::Path;
 /// SQLite-based storage manager
 pub struct Storage {
     conn: Connection,
+    /// Path to database file (for creating new connections on clone)
+    path: Option<String>,
 }
 
 impl Storage {
     /// Create a new storage instance with a database file
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
         let conn = Connection::open(path)
             .map_err(|e| Error::Storage(format!("Failed to open database: {}", e)))?;
 
-        let mut storage = Self { conn };
+        let mut storage = Self {
+            conn,
+            path: Some(path_str),
+        };
         storage.init_schema()?;
         Ok(storage)
     }
@@ -32,7 +38,7 @@ impl Storage {
         let conn = Connection::open_in_memory()
             .map_err(|e| Error::Storage(format!("Failed to create in-memory database: {}", e)))?;
 
-        let mut storage = Self { conn };
+        let mut storage = Self { conn, path: None };
         storage.init_schema()?;
         Ok(storage)
     }
@@ -394,6 +400,16 @@ impl Storage {
 impl Default for Storage {
     fn default() -> Self {
         Self::new_with_default_path().expect("Failed to create default storage")
+    }
+}
+
+impl Clone for Storage {
+    fn clone(&self) -> Self {
+        // Create a new connection to the same database
+        match &self.path {
+            Some(path) => Self::new(path).expect("Failed to clone storage connection"),
+            None => Self::new_in_memory().expect("Failed to clone in-memory storage"),
+        }
     }
 }
 

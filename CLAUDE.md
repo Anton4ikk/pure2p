@@ -127,7 +127,7 @@ cargo fmt
 1. **StartupSync** - Progress bar for pending queue (✓/✗ counters, elapsed time), automatic on startup if messages pending
 2. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n), shows yellow warning during connectivity setup, shows red error block if all connectivity attempts fail
 3. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), 24-hour expiry countdown
-4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat with ⌛ Pending status, sends ping to notify imported contact (background thread)
+4. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat with ⌛ Pending status, sends ping with sender's contact token to enable automatic two-way exchange (background thread)
 5. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 6. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 7. **Settings** - Edit retry interval (1-1440 min, 4-digit max input), auto-save with toast
@@ -135,9 +135,10 @@ cargo fmt
 
 **Keyboard:**
 - Global: Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
-- Main menu: q/Esc=quit, c=chats, s=share, i=import, n=diagnostics
+- Main menu: q/Esc=quit (only on main menu), c=chats, s=share, i=import, n=diagnostics
 - Diagnostics: r/F5=refresh
 - Text input screens (ImportContact, ChatView, Settings): All ASCII characters can be typed, Esc to go back
+- Note: 'q' and 'b' keys only work on main menu. All other screens use Esc to go back.
 
 **Colors:** Cyan=titles, Green=success/active, Yellow=warning/pending, Red=error/expired, Gray=inactive
 
@@ -164,10 +165,14 @@ cargo fmt
 ### Transport
 - Hyper HTTP/1.1 server/client
 - Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new)
-- Handlers: MessageHandler (legacy), NewMessageHandler (AppState), PingHandler (auto-create chats)
-- **PingRequest**: `{from_uid: String}` - sent on contact import to notify peer
+- Handlers: MessageHandler (legacy), NewMessageHandler (AppState), PingHandler (auto-import contacts)
+- **PingRequest**: `{contact_token: String}` - signed contact token (base64 CBOR) sent on import
 - **PingResponse**: `{uid: String, status: String}` - confirms peer is online
-- **Ping flow**: Import contact → send PingRequest → peer receives → PingHandler creates chat → PingResponse returned
+- **Automatic two-way exchange**:
+  1. Alice imports Bob → creates chat (⌛ Pending) → sends ping with Alice's token
+  2. Bob receives ping → parses token → auto-imports Alice → creates chat (● Active) → responds "ok"
+  3. Alice receives response → clears Pending flag → chat becomes Active
+  4. Both users now have each other in contacts without manual exchange
 
 ### Queue
 - Priority: Urgent > High > Normal > Low

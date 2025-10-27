@@ -115,7 +115,7 @@ pub fn render_import_contact(f: &mut Frame, app: &App) {
         f.render_widget(status_widget, chunks[3]);
 
         // Help text
-        let help_text = "Enter: Parse | Ctrl+V: Paste | Delete: Clear | b/Esc: Back | q: Quit";
+        let help_text = "Enter: Parse | Ctrl+V: Paste | Delete: Clear | Esc: Back";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)

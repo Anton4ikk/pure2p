@@ -232,7 +232,7 @@ impl App {
 
                 // Setup ping handler
                 let use_in_memory_ping = use_in_memory;
-                transport.set_ping_handler(move |sender_uid: String| {
+                transport.set_ping_handler(move |contact_token: String| {
                     // Create storage connection for this handler
                     let storage_result = if use_in_memory_ping {
                         Storage::new_in_memory()
@@ -242,10 +242,30 @@ impl App {
 
                     if let Ok(storage) = storage_result {
                         if let Ok(mut app_state) = AppState::load_from_db(&storage) {
-                            let chat = app_state.get_or_create_chat(&sender_uid);
-                            chat.mark_unread(); // Mark as active (new ping received)
-                            let _ = app_state.save_to_db(&storage);
-                            tracing::info!("Created/updated chat for ping from {}", sender_uid);
+                            // Parse and verify the contact token
+                            match crate::storage::Contact::parse_token(&contact_token) {
+                                Ok(sender_contact) => {
+                                    tracing::info!("Received ping from {} at {}", sender_contact.uid, sender_contact.ip);
+
+                                    // Check if contact already exists
+                                    let contact_exists = app_state.contacts.iter().any(|c| c.uid == sender_contact.uid);
+
+                                    if !contact_exists {
+                                        // Auto-import the sender as a new contact
+                                        app_state.contacts.push(sender_contact.clone());
+                                        tracing::info!("Auto-imported contact {} from ping", sender_contact.uid);
+                                    }
+
+                                    // Create or get existing chat (active status, not pending)
+                                    let chat = app_state.get_or_create_chat(&sender_contact.uid);
+                                    chat.mark_unread(); // Mark as active (new ping received)
+                                    let _ = app_state.save_to_db(&storage);
+                                    tracing::info!("Created/updated chat for ping from {}", sender_contact.uid);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to parse contact token from ping: {}", e);
+                                }
+                            }
                         }
                     }
                 }).await;
@@ -711,16 +731,51 @@ impl App {
             // Auto-save after importing contact and creating chat
             let _ = self.save_state();
 
+            // Generate my contact token to send in ping (so receiver can auto-import me)
+            let my_contact = crate::storage::Contact::new(
+                self.keypair.uid.to_string(),
+                self.local_ip.clone(),
+                self.keypair.public_key.clone(),
+                self.keypair.x25519_public.clone(),
+                Utc::now() + chrono::Duration::days(1), // 24 hour expiry
+            );
+            let my_token = match my_contact.sign_token(&self.keypair) {
+                Ok(token) => token,
+                Err(e) => {
+                    tracing::error!("Failed to generate contact token for ping: {}", e);
+                    if let Some(screen) = &mut self.import_contact_screen {
+                        screen.status_message = Some(format!("Error generating token: {}", e));
+                        screen.is_error = true;
+                    }
+                    return;
+                }
+            };
+
             // Send ping to the contact in background thread
             let transport = self.transport.clone();
             let contact_for_ping = contact.clone();
+            let storage_clone = self.storage.clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
-                    if let Err(e) = transport.send_ping(&contact_for_ping).await {
-                        tracing::warn!("Failed to ping newly imported contact {}: {}", contact_for_ping.uid, e);
-                    } else {
-                        tracing::info!("Successfully pinged newly imported contact {}", contact_for_ping.uid);
+                    match transport.send_ping(&contact_for_ping, &my_token).await {
+                        Ok(_ping_response) => {
+                            tracing::info!("Successfully pinged newly imported contact {}", contact_for_ping.uid);
+
+                            // Update chat status: remove pending flag since ping succeeded
+                            if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
+                                if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
+                                    // Clear pending flag - contact is reachable
+                                    chat.has_pending_messages = false;
+                                    let _ = app_state.save_to_db(&storage_clone);
+                                    tracing::info!("Updated chat status for {} to active (ping successful)", contact_for_ping.uid);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to ping newly imported contact {}: {}", contact_for_ping.uid, e);
+                            // Chat remains in pending status - will need manual retry or wait for contact to come online
+                        }
                     }
                 });
             });

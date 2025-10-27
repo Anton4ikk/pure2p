@@ -444,7 +444,7 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
         f.render_widget(metrics_widget, right_chunks[2]);
 
         // Help text
-        let help_text = "r/F5: Refresh | b/Esc: Back | q: Quit";
+        let help_text = "r/F5: Refresh | Esc: Back";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)

@@ -60,6 +60,37 @@ impl Contact {
     pub fn deactivate(&mut self) {
         self.is_active = false;
     }
+
+    /// Generate a signed token for this contact
+    ///
+    /// # Arguments
+    /// * `keypair` - KeyPair to sign the token with
+    ///
+    /// # Returns
+    /// A base64-encoded signed contact token string
+    pub fn sign_token(&self, keypair: &crate::crypto::KeyPair) -> Result<String> {
+        generate_contact_token(
+            &self.ip,
+            &self.pubkey,
+            &keypair.private_key,
+            &self.x25519_pubkey,
+            self.expiry,
+        )
+    }
+
+    /// Parse and verify a signed contact token
+    ///
+    /// # Arguments
+    /// * `token` - Base64-encoded signed contact token string
+    ///
+    /// # Returns
+    /// A Contact struct with verified data
+    ///
+    /// # Errors
+    /// Returns an error if the token is invalid or signature verification fails
+    pub fn parse_token(token: &str) -> Result<Self> {
+        parse_contact_token(token)
+    }
 }
 
 /// Internal struct for contact token serialization (without signature)

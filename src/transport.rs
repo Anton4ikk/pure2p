@@ -55,8 +55,9 @@ pub enum DeliveryState {
 /// Ping request structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PingRequest {
-    /// UID of the sender
-    pub from_uid: String,
+    /// Contact token of the sender (base64 CBOR with signature)
+    /// This allows the receiver to automatically import the sender
+    pub contact_token: String,
 }
 
 /// Ping response structure
@@ -297,6 +298,7 @@ impl Transport {
     ///
     /// # Arguments
     /// * `contact` - The contact to ping (uses the Contact struct from storage module)
+    /// * `my_contact_token` - Signed contact token to send (allows receiver to auto-import sender)
     ///
     /// # Returns
     /// * `Ok(PingResponse)` - Ping successful, contains UID and status
@@ -318,23 +320,21 @@ impl Transport {
     ///     Utc::now() + Duration::days(30),
     /// );
     ///
-    /// match transport.send_ping(&contact).await {
+    /// // Send ping with your contact token (empty string for legacy/test usage)
+    /// match transport.send_ping(&contact, "").await {
     ///     Ok(response) => println!("Ping OK: {} - {}", response.uid, response.status),
     ///     Err(e) => println!("Ping failed: {}", e),
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn send_ping(&self, contact: &crate::storage::Contact) -> Result<PingResponse> {
+    pub async fn send_ping(&self, contact: &crate::storage::Contact, my_contact_token: &str) -> Result<PingResponse> {
         info!("Sending ping to {} at {}", contact.uid, contact.ip);
 
-        // Get local UID to send in ping request
-        let uid_guard = self.local_uid.lock().await;
-        let from_uid = uid_guard.as_ref().map(|s| s.clone()).unwrap_or_else(|| "unknown".to_string());
-        drop(uid_guard);
-
-        // Create ping request with sender's UID
-        let ping_request = PingRequest { from_uid };
+        // Create ping request with sender's contact token (allows receiver to auto-import)
+        let ping_request = PingRequest {
+            contact_token: my_contact_token.to_string(),
+        };
 
         // Serialize to CBOR
         let ping_body = serde_cbor::to_vec(&ping_request)
@@ -539,12 +539,12 @@ async fn handle_request(
             // Deserialize the ping request from CBOR
             match serde_cbor::from_slice::<PingRequest>(&body) {
                 Ok(ping_req) => {
-                    info!("Received ping from {}", ping_req.from_uid);
+                    info!("Received ping with contact token");
 
-                    // Call the ping handler if set (to create chat)
+                    // Call the ping handler if set (to auto-import sender and create chat)
                     let handler_guard = ping_handler.lock().await;
                     if let Some(handler) = handler_guard.as_ref() {
-                        handler(ping_req.from_uid.clone());
+                        handler(ping_req.contact_token.clone());
                     } else {
                         warn!("No ping handler set");
                     }
@@ -564,7 +564,7 @@ async fn handle_request(
                     // Serialize to CBOR
                     match serde_cbor::to_vec(&response) {
                         Ok(cbor_data) => {
-                            info!("Responding to ping from {}", ping_req.from_uid);
+                            info!("Responding to ping");
                             Ok(Response::builder()
                                 .status(StatusCode::OK)
                                 .header("Content-Type", "application/cbor")

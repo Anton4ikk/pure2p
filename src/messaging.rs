@@ -391,7 +391,9 @@ pub async fn create_chat_from_ping(
     contact: &Contact,
 ) -> Result<bool> {
     // Try to ping the contact
-    let ping_result = transport.send_ping(contact).await;
+    // Note: This legacy API doesn't send a contact token (empty string)
+    // For proper ping with auto-import, use the TUI flow which sends tokens
+    let ping_result = transport.send_ping(contact, "").await;
 
     match ping_result {
         Ok(response) => {

@@ -2,8 +2,7 @@
 
 Setup instructions for Pure2P development.
 
-> **Quick Links**: [README](README.md) • [Roadmap](ROADMAP.md) • [Claude Docs](CLAUDE.md)
-
+> **Quick Links**: [README](README.md) • [Usage Guide](USAGE.md) • [Roadmap](ROADMAP.md)
 ---
 
 ## Quick Start
@@ -304,5 +303,5 @@ See [ROADMAP.md](ROADMAP.md#-contributing) for details.
 ## Related Docs
 
 - **[README.md](README.md)** — Overview and quick start
+- **[USAGE.md](USAGE.md)** — User guide and troubleshooting
 - **[ROADMAP.md](ROADMAP.md)** — Version timeline
-- **[CLAUDE.md](CLAUDE.md)** — Implementation details

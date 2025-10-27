@@ -94,7 +94,7 @@ pub fn render_settings(f: &mut Frame, app: &App) {
         f.render_widget(status_widget, chunks[3]);
 
         // Help text
-        let help_text = "Enter: Save | Delete: Clear | b/Esc: Back | q: Quit";
+        let help_text = "Enter: Save | Delete: Clear | Esc: Back";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
