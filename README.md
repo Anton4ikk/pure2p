@@ -192,7 +192,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for setup.
 
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Setup, architecture, API
 - **[ROADMAP.md](ROADMAP.md)** - Version timeline
-- **[CLAUDE.md](CLAUDE.md)** - Implementation notes
+- **[USAGE.md](USAGE.md)** - Implementation notes
 
 ---
 

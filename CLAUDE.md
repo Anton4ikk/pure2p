@@ -296,7 +296,14 @@ cargo fmt
 - `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
 **`tui_tests/` (122 tests):**
-- `app_tests.rs` (35 tests) - App struct and business logic (includes self-import rejection, valid import, duplicate import)
+- `app_tests/` (44 tests) - App business logic, modularized by feature area:
+  - `helpers.rs` - Shared test utilities
+  - `initialization_tests.rs` (6 tests) - App creation, state loading, settings
+  - `navigation_tests.rs` (14 tests) - Screen transitions, menu navigation
+  - `contact_import_tests.rs` (3 tests) - Import validation, duplicate detection, self-import rejection
+  - `chat_management_tests.rs` (14 tests) - Chat creation, deletion, selection
+  - `messaging_tests.rs` (3 tests) - Message sending
+  - `startup_tests.rs` (4 tests) - Startup sync, connectivity
 - `screen_tests/` (76 tests) - All screens, modularized by screen type (consent screen removed):
   - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
   - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)

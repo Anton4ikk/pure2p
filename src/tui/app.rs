@@ -118,6 +118,11 @@ impl App {
         };
         let queue = MessageQueue::new_with_path(&queue_path)?;
 
+        // Sync pending message flags with actual queue state
+        if let Ok(pending_uids) = queue.get_pending_contact_uids() {
+            app_state.sync_pending_status(&pending_uids);
+        }
+
         // Check for pending messages in queue
         let pending_count = queue.count_pending()?;
 
@@ -201,6 +206,11 @@ impl App {
         }
         if loaded_state.user_ip.is_none() {
             loaded_state.user_ip = self.app_state.user_ip.clone();
+        }
+
+        // Sync pending message flags with actual queue state
+        if let Ok(pending_uids) = self.queue.get_pending_contact_uids() {
+            loaded_state.sync_pending_status(&pending_uids);
         }
 
         // Update app state
@@ -722,10 +732,8 @@ impl App {
             // Add contact to list
             self.app_state.contacts.push(contact.clone());
 
-            // Create a new chat for this contact and mark as pending
-            // (waiting for ping response)
-            let mut new_chat = crate::storage::Chat::new(contact_uid);
-            new_chat.mark_has_pending(); // Show ⌛ Pending status until ping response
+            // Create a new chat for this contact
+            let new_chat = crate::storage::Chat::new(contact_uid);
             self.app_state.chats.push(new_chat);
 
             // Auto-save after importing contact and creating chat
@@ -751,30 +759,66 @@ impl App {
                 }
             };
 
-            // Send ping to the contact in background thread
+            // Try to send ping immediately, queue on failure (background thread)
             let transport = self.transport.clone();
             let contact_for_ping = contact.clone();
             let storage_clone = self.storage.clone();
+            let sender_uid = self.keypair.uid.to_string();
+
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
+                    // Try to send ping
                     match transport.send_ping(&contact_for_ping, &my_token).await {
                         Ok(_ping_response) => {
                             tracing::info!("Successfully pinged newly imported contact {}", contact_for_ping.uid);
-
-                            // Update chat status: remove pending flag since ping succeeded
-                            if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
-                                if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
-                                    // Clear pending flag - contact is reachable
-                                    chat.has_pending_messages = false;
+                            // Ping succeeded - ensure pending status is cleared
+                            if let Ok(queue) = crate::queue::MessageQueue::new_with_path("./app_data/message_queue.db") {
+                                if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
+                                    let pending_uids = queue.get_pending_contact_uids().unwrap_or_default();
+                                    app_state.sync_pending_status(&pending_uids);
                                     let _ = app_state.save_to_db(&storage_clone);
-                                    tracing::info!("Updated chat status for {} to active (ping successful)", contact_for_ping.uid);
                                 }
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to ping newly imported contact {}: {}", contact_for_ping.uid, e);
-                            // Chat remains in pending status - will need manual retry or wait for contact to come online
+                            tracing::warn!("Failed to ping newly imported contact {}: {}. Queueing for retry.", contact_for_ping.uid, e);
+
+                            // Create a special "ping" message to queue
+                            let ping_message = crate::storage::Message::new(
+                                uuid::Uuid::new_v4().to_string(),
+                                sender_uid,
+                                contact_for_ping.uid.clone(),
+                                my_token.as_bytes().to_vec(), // Store contact token as content
+                                Utc::now().timestamp_millis(),
+                            );
+
+                            // Create queue instance for this thread
+                            let mut queue = match crate::queue::MessageQueue::new_with_path("./app_data/message_queue.db") {
+                                Ok(q) => q,
+                                Err(e) => {
+                                    tracing::error!("Failed to create queue: {}", e);
+                                    return;
+                                }
+                            };
+
+                            // Queue the ping with Urgent priority
+                            if let Err(e) = queue.enqueue_with_type(
+                                ping_message,
+                                crate::queue::Priority::Urgent,
+                                "ping"
+                            ) {
+                                tracing::error!("Failed to queue ping for {}: {}", contact_for_ping.uid, e);
+                                return;
+                            }
+
+                            // Sync pending status with queue (will set has_pending_messages=true)
+                            if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
+                                if let Ok(pending_uids) = queue.get_pending_contact_uids() {
+                                    app_state.sync_pending_status(&pending_uids);
+                                    let _ = app_state.save_to_db(&storage_clone);
+                                }
+                            }
                         }
                     }
                 });

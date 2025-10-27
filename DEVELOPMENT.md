@@ -103,8 +103,16 @@ src/
 │   │   └── settings_tests.rs
 │   └── tui_tests/      # TUI module tests (122 tests)
 │       ├── mod.rs
-│       ├── app_tests.rs
-│       ├── screen_tests/     # Modularized screen tests (75 tests - consent removed)
+│       ├── app_tests/        # Modularized app tests (44 tests)
+│       │   ├── mod.rs
+│       │   ├── helpers.rs
+│       │   ├── initialization_tests.rs
+│       │   ├── navigation_tests.rs
+│       │   ├── contact_import_tests.rs
+│       │   ├── chat_management_tests.rs
+│       │   ├── messaging_tests.rs
+│       │   └── startup_tests.rs
+│       ├── screen_tests/     # Modularized screen tests (76 tests - consent removed)
 │       │   ├── mod.rs
 │       │   ├── share_contact_tests.rs
 │       │   ├── import_contact_tests.rs
@@ -189,7 +197,14 @@ src/tests/
 │   ├── app_state_tests.rs (21 tests) - AppState JSON/CBOR + SQLite (save/load, messages, updates, migration)
 │   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
 └── tui_tests/            (122 tests) - Organized by TUI components
-    ├── app_tests.rs      (35 tests)  - App business logic, self-import prevention
+    ├── app_tests/        (44 tests)  - Modularized by feature area
+    │   ├── helpers.rs                - Shared test utilities
+    │   ├── initialization_tests.rs   (6 tests)   - App creation, state loading, settings
+    │   ├── navigation_tests.rs       (14 tests)  - Screen transitions, menu navigation
+    │   ├── contact_import_tests.rs   (3 tests)   - Import validation, duplicate detection, self-import prevention
+    │   ├── chat_management_tests.rs  (14 tests)  - Chat creation, deletion, selection
+    │   ├── messaging_tests.rs        (3 tests)   - Message sending
+    │   └── startup_tests.rs          (4 tests)   - Startup sync, connectivity
     ├── screen_tests/     (76 tests)  - Modularized by screen type
     │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
     │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
@@ -207,12 +222,6 @@ src/tests/
 ```bash
 cargo test --lib                        # All library tests
 cargo test crypto_tests                 # Crypto tests
-cargo test storage_tests                # All storage tests
-cargo test tui_tests                    # All TUI tests
-cargo test storage_tests::contact       # Just contact tests
-cargo test tui_tests::app               # Just app tests
-cargo test tui_tests::screen_tests      # All screen tests
-cargo test screen_tests::diagnostics    # Just diagnostics tests
 ```
 
 ---
