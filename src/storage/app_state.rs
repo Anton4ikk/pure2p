@@ -33,7 +33,7 @@ impl AppState {
     /// This range is officially designated by IANA for dynamic/private use and
     /// is typically not blocked by ISPs. The large range (16,384 ports) ensures
     /// that multiple devices on the same network will likely get different ports.
-    fn generate_random_port() -> u16 {
+    pub fn generate_random_port() -> u16 {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         // IANA dynamic/private port range: 49152-65535

@@ -86,13 +86,13 @@ cargo fmt
 - `queue` - SQLite-backed message queue in `./app_data/message_queue.db`
 - `connectivity_result` - Stores startup/latest connectivity test results
 - `local_ip` - Automatically updated from connectivity results (external IP:port)
-- `local_port` - Port for listening and connectivity tests (random 49152-65535)
+- `local_port` - Port for listening and connectivity tests (smart selection: reuses saved port when IP unchanged, generates new random port 49152-65535 when IP changes or first run)
 - `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
 - Startup: Migrates legacy JSON if exists, loads all data from SQLite, starts transport server, runs `establish_connectivity()` in background
 - Transport: Runs HTTP server in background thread, handlers create new SQLite connections to persist incoming pings/messages
 - State Reload: Automatically reloads from SQLite when navigating (chat list, chat view, main menu) to pick up transport handler changes
 - ShareContact: Uses detected external IP for accurate contact tokens
-- ImportContact: Automatically sends ping to imported contact to notify them
+- ImportContact: Automatically sends ping to imported contact to notify them, marks chat as active when ping response received
 - Persistence: Auto-saves to SQLite after import/send/delete/settings operations, transport handlers independently persist changes
 
 ## TUI Architecture
@@ -170,8 +170,9 @@ cargo fmt
 - **Automatic two-way exchange**:
   1. Alice imports Bob → creates chat (⌛ Pending) → sends ping with Alice's token
   2. Bob receives ping → parses token → auto-imports Alice → creates chat (● Active) → responds "ok"
-  3. Alice receives response → clears Pending flag → chat becomes Active
-  4. Both users now have each other in contacts without manual exchange
+  3. Alice receives response → marks chat as Active (was ⌛ Pending) → saves to DB
+  4. Both users now have each other in contacts with Active chats without manual exchange
+  5. If ping fails, Alice's chat stays ⌛ Pending → retry worker keeps trying → marks Active when succeeds
 
 ### Queue
 - Priority: Urgent > High > Normal > Low
@@ -184,6 +185,7 @@ cargo fmt
   - Interval: Configurable via Settings (default 1 minute, range 1-1440 min)
   - Handles both "ping" and "text" message types
   - Updates queue status (mark_success/mark_failed) automatically
+  - Marks chats as active when ping succeeds (clears ⌛ Pending status)
   - Runs silently without UI interruption
   - Auto-starts when connectivity completes, auto-stops on app exit
 
@@ -239,6 +241,18 @@ cargo fmt
 - `create_chat_from_ping()` → active/inactive based on response
 - `delete_chat()` → smart (active=notify, inactive=local)
 - `handle_incoming_message()` → auto-create chat if missing
+
+### Port Selection
+- **Smart port persistence**: `App::select_port()` intelligently reuses ports across restarts
+- **Same network**: If saved IP matches current IP (comparing IP part only, ignoring port), reuses saved `user_port`
+- **Different network**: If IP changed or no saved IP, generates new random port (49152-65535)
+- **Benefits**:
+  - Contact tokens remain valid across app restarts on same network
+  - Port mappings (PCP/NAT-PMP/UPnP) stay consistent
+  - No need to regenerate/reshare contact tokens after restart
+  - Automatic adaptation when switching networks (home/work/mobile hotspot)
+- **Storage**: Port saved to SQLite after connectivity detection, loaded on startup
+- **Logging**: Traces IP changes and port selection decisions for debugging
 
 ### Connectivity
 

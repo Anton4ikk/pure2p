@@ -103,7 +103,9 @@ impl App {
 
         // Load or use default network info
         let local_ip = app_state.user_ip.clone().unwrap_or_else(Self::get_local_ip);
-        let local_port = app_state.user_port;
+
+        // Smart port selection: reuse saved port if IP hasn't changed, generate new if IP changed
+        let local_port = Self::select_port(&app_state, &local_ip);
 
         // Create transport layer
         let transport = Transport::new();
@@ -775,11 +777,18 @@ impl App {
                 rt.block_on(async move {
                     // Try to send ping
                     match transport.send_ping(&contact_for_ping, &my_token).await {
-                        Ok(_ping_response) => {
-                            tracing::info!("Successfully pinged newly imported contact {}", contact_for_ping.uid);
-                            // Ping succeeded - ensure pending status is cleared
+                        Ok(ping_response) => {
+                            tracing::info!("Successfully pinged newly imported contact {} (response: {})", contact_for_ping.uid, ping_response.status);
+                            // Ping succeeded - mark chat as active and clear pending status
                             if let Ok(queue) = crate::queue::MessageQueue::new_with_path("./app_data/message_queue.db") {
                                 if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
+                                    // Mark chat as active (connection confirmed)
+                                    if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
+                                        chat.mark_unread(); // Mark as active
+                                        tracing::info!("Marked chat with {} as active after successful ping", contact_for_ping.uid);
+                                    }
+
+                                    // Clear pending status from queue
                                     let pending_uids = queue.get_pending_contact_uids().unwrap_or_default();
                                     app_state.sync_pending_status(&pending_uids);
                                     let _ = app_state.save_to_db(&storage_clone);
@@ -887,7 +896,7 @@ impl App {
                     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                     rt.block_on(async move {
                         // Create new MessageQueue instance (persistent SQLite allows multiple connections)
-                        let mut queue = match crate::queue::MessageQueue::new_with_path("message_queue.db") {
+                        let mut queue = match crate::queue::MessageQueue::new_with_path("./app_data/message_queue.db") {
                             Ok(q) => q,
                             Err(e) => {
                                 tracing::error!("Failed to create queue: {}", e);
@@ -1048,7 +1057,10 @@ impl App {
                                     // For ping, content is the contact token
                                     let token = String::from_utf8_lossy(&queued_msg.message.content).to_string();
                                     transport.send_ping(&contact, &token).await
-                                        .map(|_| ())
+                                        .map(|ping_response| {
+                                            tracing::info!("Retry worker: Ping successful, response: {}", ping_response.status);
+                                            Some(ping_response)
+                                        })
                                         .map_err(|e| crate::Error::Transport(e.to_string()))
                                 } else {
                                     // For text messages, send normally
@@ -1058,16 +1070,28 @@ impl App {
                                         "text",
                                         queued_msg.message.content.clone(),
                                     ).await
+                                        .map(|_| None)
                                         .map_err(|e| crate::Error::Transport(e.to_string()))
                                 };
 
                                 match result {
-                                    Ok(()) => {
+                                    Ok(ping_response_opt) => {
                                         if let Err(e) = queue.mark_success(&message_id) {
                                             tracing::error!("Failed to mark message {} as delivered: {}", message_id, e);
                                         } else {
                                             succeeded += 1;
                                             tracing::info!("Retry worker: {} delivered successfully to {}", message_type, target_uid);
+
+                                            // If this was a successful ping, mark chat as active
+                                            if message_type == "ping" && ping_response_opt.is_some() {
+                                                if let Ok(mut app_state) = AppState::load_from_db(&storage) {
+                                                    if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == target_uid) {
+                                                        chat.mark_unread(); // Mark as active
+                                                        tracing::info!("Retry worker: Marked chat with {} as active after successful ping", target_uid);
+                                                        let _ = app_state.save_to_db(&storage);
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -1159,7 +1183,10 @@ impl App {
                                 let result = if message_type == "ping" {
                                     let token = String::from_utf8_lossy(&queued_msg.message.content).to_string();
                                     transport.send_ping(&contact, &token).await
-                                        .map(|_| ())
+                                        .map(|ping_response| {
+                                            tracing::info!("Retry worker (periodic): Ping successful, response: {}", ping_response.status);
+                                            Some(ping_response)
+                                        })
                                         .map_err(|e| crate::Error::Transport(e.to_string()))
                                 } else {
                                     transport.send_message(
@@ -1168,15 +1195,27 @@ impl App {
                                         "text",
                                         queued_msg.message.content.clone(),
                                     ).await
+                                        .map(|_| None)
                                         .map_err(|e| crate::Error::Transport(e.to_string()))
                                 };
 
                                 match result {
-                                    Ok(()) => {
+                                    Ok(ping_response_opt) => {
                                         if let Err(e) = queue.mark_success(&message_id) {
                                             tracing::error!("Failed to mark message as delivered: {}", e);
                                         } else {
-                                            tracing::info!("Retry worker: {} delivered to {}", message_type, target_uid);
+                                            tracing::info!("Retry worker (periodic): {} delivered to {}", message_type, target_uid);
+
+                                            // If this was a successful ping, mark chat as active
+                                            if message_type == "ping" && ping_response_opt.is_some() {
+                                                if let Ok(mut app_state) = AppState::load_from_db(&storage) {
+                                                    if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == target_uid) {
+                                                        chat.mark_unread(); // Mark as active
+                                                        tracing::info!("Retry worker (periodic): Marked chat with {} as active after successful ping", target_uid);
+                                                        let _ = app_state.save_to_db(&storage);
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -1213,6 +1252,46 @@ impl App {
                 tracing::info!("Retry worker stopped");
             }
         }
+    }
+
+    /// Smart port selection: reuse saved port if IP hasn't changed, generate new if IP changed
+    ///
+    /// This ensures that when users restart the app on the same network, they keep the same port
+    /// (maintaining their contact token validity and any port mappings). But if they switch
+    /// networks (different IP), a new port is generated.
+    ///
+    /// # Arguments
+    /// * `app_state` - Current application state with saved network info
+    /// * `current_ip` - Current detected IP address
+    ///
+    /// # Returns
+    /// Port number to use (either saved port or newly generated one)
+    fn select_port(app_state: &AppState, current_ip: &str) -> u16 {
+        // Extract just the IP part from the IP:port string
+        let extract_ip = |ip_str: &str| -> String {
+            ip_str.split(':').next().unwrap_or(ip_str).to_string()
+        };
+
+        let current_ip_only = extract_ip(current_ip);
+
+        // If we have a saved IP, check if it matches the current IP
+        if let Some(ref saved_ip) = app_state.user_ip {
+            let saved_ip_only = extract_ip(saved_ip);
+
+            // If IPs match (same network), reuse the saved port
+            if saved_ip_only == current_ip_only {
+                tracing::info!("IP unchanged ({}), reusing saved port {}", current_ip_only, app_state.user_port);
+                return app_state.user_port;
+            } else {
+                // IP changed (different network), generate new port
+                tracing::info!("IP changed ({}→{}), generating new port", saved_ip_only, current_ip_only);
+            }
+        }
+
+        // No saved IP or IP changed - generate new random port
+        let new_port = AppState::generate_random_port();
+        tracing::info!("Generated new port: {}", new_port);
+        new_port
     }
 
     /// Get local IP address (simplified - returns localhost for now)

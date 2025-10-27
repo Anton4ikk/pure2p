@@ -277,6 +277,19 @@ sudo apt-get install pkg-config libssl-dev
 - Check SQLite locks: `rm -rf target/` and rebuild
 - Use `-- --test-threads=1` to run sequentially
 
+**Contact token invalid after restart:**
+- App now intelligently reuses the same port when on the same network
+- Port only changes when your external IP changes (different network)
+- Check diagnostics screen (press `n`) to verify external IP:port
+- If you need to force a new port, delete `./app_data/pure2p.db`
+
+**Chat stuck in ⌛ Pending status:**
+- Chat becomes Active (●) only when ping response is received
+- If contact is offline/unreachable, chat stays Pending until they come online
+- Retry worker automatically keeps trying to ping them
+- Chat will auto-transition to Active when ping finally succeeds
+- Check queue size in diagnostics (press `n`) to see pending messages
+
 ---
 
 ## Contributing
@@ -296,10 +309,12 @@ sudo apt-get install pkg-config libssl-dev
 - **Production**: `./app_data/pure2p.db` (all app data) + `./app_data/message_queue.db` (retry queue)
 - **Tests**: In-memory SQLite databases (no filesystem pollution)
 - **Migration**: Legacy `app_state.json` auto-migrated to SQLite on first run (backed up as `.json.bak`)
-- **Data**: User identity (keypair, UID), contacts, chats, messages, settings
+- **Data**: User identity (keypair, UID), contacts, chats, messages, settings, network info (IP, port)
 - **Auto-save**: State saved to SQLite after every modification
 - **Concurrent access**: Transport handlers create separate connections to same database file
 - **State reload**: App reloads from DB when navigating to pick up incoming messages
+- **Port persistence**: Smart port selection reuses saved port when IP unchanged (maintains contact token validity across restarts)
+- **Chat status**: Chats marked as Active only when ping response received (confirms two-way connectivity)
 - Safe to delete `./app_data/` for full reset (will recreate with defaults)
 
 See [ROADMAP.md](ROADMAP.md#-contributing) for details.
