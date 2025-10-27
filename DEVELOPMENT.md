@@ -75,6 +75,7 @@ src/
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
 │   ├── app.rs          # App business logic with automatic background connectivity and retry worker
+│   ├── clipboard.rs    # Clipboard abstraction (ClipboardProvider trait, RealClipboard, MockClipboard)
 │   └── ui/             # Modular rendering (8 files - StartupSync screen removed)
 │       ├── mod.rs      # Main ui() dispatcher
 │       ├── main_menu.rs
@@ -85,7 +86,7 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (387 tests)
+├── tests/              # Unit tests (395 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
@@ -101,7 +102,7 @@ src/
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
 │   │   └── settings_tests.rs
-│   └── tui_tests/      # TUI module tests (120 tests)
+│   └── tui_tests/      # TUI module tests (128 tests)
 │       ├── mod.rs
 │       ├── app_tests/        # Modularized app tests (42 tests)
 │       │   ├── mod.rs
@@ -112,7 +113,7 @@ src/
 │       │   ├── chat_management_tests.rs
 │       │   ├── messaging_tests.rs
 │       │   └── startup_tests.rs
-│       ├── screen_tests/     # Modularized screen tests (76 tests)
+│       ├── screen_tests/     # Modularized screen tests (84 tests)
 │       │   ├── mod.rs
 │       │   ├── share_contact_tests.rs
 │       │   ├── import_contact_tests.rs
@@ -140,7 +141,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (387 total)
+cargo test                     # All tests (395 total)
 
 # Quality
 cargo fmt                      # Format
@@ -195,7 +196,7 @@ src/tests/
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (21 tests) - AppState JSON/CBOR + SQLite (save/load, messages, updates, migration)
 │   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
-└── tui_tests/            (120 tests) - Organized by TUI components
+└── tui_tests/            (128 tests) - Organized by TUI components
     ├── app_tests/        (42 tests)  - Modularized by feature area
     │   ├── helpers.rs                - Shared test utilities
     │   ├── initialization_tests.rs   (6 tests)   - App creation, state loading, settings
@@ -204,13 +205,13 @@ src/tests/
     │   ├── chat_management_tests.rs  (14 tests)  - Chat creation, deletion, selection
     │   ├── messaging_tests.rs        (3 tests)   - Message sending
     │   └── startup_tests.rs          (2 tests)   - Startup screen, connectivity
-    ├── screen_tests/     (76 tests)  - Modularized by screen type
-    │   ├── share_contact_tests.rs    (5 tests)   - ShareContactScreen
-    │   ├── import_contact_tests.rs   (10 tests)  - ImportContactScreen
+    ├── screen_tests/     (84 tests)  - Modularized by screen type
+    │   ├── share_contact_tests.rs    (8 tests)   - ShareContactScreen (token generation, file save, clipboard mocking)
+    │   ├── import_contact_tests.rs   (13 tests)  - ImportContactScreen (parsing, validation, clipboard mocking)
     │   ├── chat_list_tests.rs        (5 tests)   - ChatListScreen
     │   ├── chat_view_tests.rs        (3 tests)   - ChatViewScreen
     │   ├── settings_tests.rs         (10 tests)  - SettingsScreen
-    │   ├── diagnostics_tests.rs      (20 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT)
+    │   ├── diagnostics_tests.rs      (25 tests)  - DiagnosticsScreen (IPv4/IPv6, external endpoint, RTT, queue size, CGNAT, HTTP fallback)
     │   └── status_indicators_tests.rs (10 tests) - Status badges and contact expiry
     ├── types_tests.rs    (3 tests)   - MenuItem enum
     └── ui_tests.rs       (4 tests)   - UI helper functions (format_duration_until)
@@ -220,7 +221,14 @@ src/tests/
 ```bash
 cargo test --lib                        # All library tests
 cargo test crypto_tests                 # Crypto tests
+cargo test share_contact_tests          # Clipboard tests (mocked)
 ```
+
+**Testing Philosophy:**
+- **Clipboard Abstraction**: Trait-based `ClipboardProvider` allows mocking clipboard operations in tests
+- **MockClipboard**: Thread-safe mock implementation for testing without real clipboard access
+- **Graceful Degradation**: Tests verify user-friendly error messages when clipboard unavailable (e.g., SSH)
+- **No External Dependencies**: Tests use mocks to avoid race conditions and platform-specific clipboard issues
 
 ---
 

@@ -156,3 +156,92 @@ fn test_import_contact_screen_get_contact() {
     assert!(screen.get_contact().is_some());
     assert_eq!(screen.get_contact().unwrap().ip, local_ip);
 }
+
+#[test]
+fn test_paste_from_clipboard_graceful_degradation() {
+    use crate::tui::clipboard::mock::MockClipboard;
+
+    // Test that clipboard errors are handled gracefully (especially for SSH)
+    let mut screen = ImportContactScreen::new();
+
+    // Test with failing clipboard (simulates SSH environment)
+    let mock_clipboard = MockClipboard::new_failing();
+    screen.paste_from_clipboard_with_provider(&mut Ok(mock_clipboard));
+
+    // Should have error message
+    assert!(
+        screen.status_message.is_some(),
+        "Status message should be set after paste attempt"
+    );
+
+    let status = screen.status_message.as_ref().unwrap();
+
+    // Should mention typing manually
+    assert!(
+        status.to_lowercase().contains("manual") || status.to_lowercase().contains("type"),
+        "Error message should suggest alternative (type manually): {}",
+        status
+    );
+    assert!(
+        screen.is_error,
+        "Should be in error state when clipboard unavailable"
+    );
+}
+
+#[test]
+fn test_paste_clipboard_error_messages_helpful() {
+    use crate::tui::clipboard::mock::MockClipboard;
+
+    // Verify error messages are user-friendly and actionable
+    let mut screen = ImportContactScreen::new();
+
+    // Test with failing clipboard
+    let mock_clipboard = MockClipboard::new_failing();
+    screen.paste_from_clipboard_with_provider(&mut Ok(mock_clipboard));
+
+    if let Some(status) = &screen.status_message {
+        // If there was an error, message should be user-friendly
+        if screen.is_error {
+            assert!(
+                !status.contains("X11") && !status.contains("server connection"),
+                "Error messages should be user-friendly, not technical: {}",
+                status
+            );
+            // Should suggest alternative action
+            assert!(
+                status.to_lowercase().contains("manual") || status.to_lowercase().contains("type"),
+                "Error message should suggest typing manually: {}",
+                status
+            );
+        }
+    }
+}
+
+#[test]
+fn test_paste_from_clipboard_success() {
+    use crate::tui::clipboard::mock::MockClipboard;
+    use crate::tui::clipboard::ClipboardProvider;
+    use crate::storage::generate_contact_token;
+
+    // Test successful clipboard paste
+    let keypair = KeyPair::generate().expect("Failed to generate keypair");
+    let local_ip = "192.168.1.100:8080";
+    let expiry = Utc::now() + Duration::days(30);
+    let token = generate_contact_token(local_ip, &keypair.public_key, &keypair.private_key, &keypair.x25519_public, expiry)
+        .expect("Failed to generate token");
+
+    let mut screen = ImportContactScreen::new();
+
+    // Set up mock clipboard with token
+    let mut mock_clipboard = MockClipboard::new();
+    mock_clipboard.set_text(&token).expect("Failed to set mock clipboard");
+    screen.paste_from_clipboard_with_provider(&mut Ok(mock_clipboard));
+
+    // Should have success message
+    assert!(!screen.is_error, "Should not be in error state");
+    assert_eq!(screen.input, token, "Input should contain pasted token");
+    assert!(
+        screen.status_message.as_ref().unwrap().contains("Pasted"),
+        "Should have paste success message"
+    );
+}

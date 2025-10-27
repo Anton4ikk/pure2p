@@ -1,9 +1,9 @@
 //! Screen state structures for TUI
 
-use arboard::Clipboard;
 use chrono::{DateTime, Duration, Utc};
 use crate::crypto::KeyPair;
 use crate::storage::{generate_contact_token, parse_contact_token, Contact};
+use crate::tui::clipboard::{ClipboardProvider, RealClipboard, ClipboardError};
 use std::fs;
 
 /// Share Contact screen state
@@ -39,14 +39,22 @@ impl ShareContactScreen {
 
     /// Copy token to clipboard
     pub fn copy_to_clipboard(&mut self) {
-        match Clipboard::new() {
-            Ok(mut clipboard) => {
+        self.copy_to_clipboard_with_provider(&mut RealClipboard::new());
+    }
+
+    /// Copy token to clipboard with custom provider (for testing)
+    pub(crate) fn copy_to_clipboard_with_provider<P>(&mut self, clipboard_result: &mut Result<P, ClipboardError>)
+    where
+        P: ClipboardProvider,
+    {
+        match clipboard_result {
+            Ok(clipboard) => {
                 match clipboard.set_text(&self.token) {
                     Ok(_) => self.status_message = Some("Copied to clipboard!".to_string()),
-                    Err(e) => self.status_message = Some(format!("Copy failed: {}", e)),
+                    Err(e) => self.status_message = Some(format!("Copy failed: {}. Use 's' to save to file", e)),
                 }
             }
-            Err(e) => self.status_message = Some(format!("Clipboard error: {}", e)),
+            Err(_) => self.status_message = Some("Clipboard not available over SSH. Use 's' to save to file".to_string()),
         }
     }
 
@@ -104,8 +112,16 @@ impl ImportContactScreen {
 
     /// Paste from clipboard
     pub fn paste_from_clipboard(&mut self) {
-        match Clipboard::new() {
-            Ok(mut clipboard) => {
+        self.paste_from_clipboard_with_provider(&mut RealClipboard::new());
+    }
+
+    /// Paste from clipboard with custom provider (for testing)
+    pub(crate) fn paste_from_clipboard_with_provider<P>(&mut self, clipboard_result: &mut Result<P, ClipboardError>)
+    where
+        P: ClipboardProvider,
+    {
+        match clipboard_result {
+            Ok(clipboard) => {
                 match clipboard.get_text() {
                     Ok(text) => {
                         self.input = text.trim().to_string();
@@ -113,13 +129,13 @@ impl ImportContactScreen {
                         self.is_error = false;
                     }
                     Err(e) => {
-                        self.status_message = Some(format!("Failed to paste: {}", e));
+                        self.status_message = Some(format!("Failed to paste: {}. Type token manually", e));
                         self.is_error = true;
                     }
                 }
             }
-            Err(e) => {
-                self.status_message = Some(format!("Clipboard error: {}", e));
+            Err(_) => {
+                self.status_message = Some("Clipboard not available over SSH. Type token manually".to_string());
                 self.is_error = true;
             }
         }
@@ -371,6 +387,8 @@ pub struct DiagnosticsScreen {
     pub natpmp_status: Option<Result<crate::connectivity::PortMappingResult, String>>,
     /// UPnP mapping status
     pub upnp_status: Option<Result<crate::connectivity::PortMappingResult, String>>,
+    /// HTTP IP detection fallback status
+    pub http_fallback_status: Option<Result<crate::connectivity::PortMappingResult, String>>,
     /// Whether CGNAT was detected
     pub cgnat_detected: bool,
     /// Whether diagnostics are being refreshed
@@ -398,6 +416,7 @@ impl DiagnosticsScreen {
             pcp_status: None,
             natpmp_status: None,
             upnp_status: None,
+            http_fallback_status: None,
             cgnat_detected: false,
             is_refreshing: false,
             status_message: None,
@@ -423,6 +442,11 @@ impl DiagnosticsScreen {
     /// Set UPnP status
     pub fn set_upnp_status(&mut self, status: Result<crate::connectivity::PortMappingResult, String>) {
         self.upnp_status = Some(status);
+    }
+
+    /// Set HTTP fallback status
+    pub fn set_http_fallback_status(&mut self, status: Result<crate::connectivity::PortMappingResult, String>) {
+        self.http_fallback_status = Some(status);
         self.is_refreshing = false;
     }
 
@@ -570,6 +594,21 @@ impl DiagnosticsScreen {
                 self.ipv4_address = Some(mapping.external_ip.to_string());
             } else if mapping.external_ip.is_ipv6() {
                 self.ipv6_address = Some(mapping.external_ip.to_string());
+            }
+
+            // Check if this is HTTP fallback (when all NAT traversal failed)
+            if mapping.protocol == crate::connectivity::MappingProtocol::Direct {
+                // This is HTTP fallback - all NAT traversal methods failed
+                self.http_fallback_status = Some(Ok(mapping.clone()));
+            }
+        } else {
+            // No successful mapping at all - HTTP fallback also failed
+            let all_failed = matches!(result.pcp, crate::connectivity::StrategyAttempt::Failed(_))
+                && matches!(result.natpmp, crate::connectivity::StrategyAttempt::Failed(_))
+                && matches!(result.upnp, crate::connectivity::StrategyAttempt::Failed(_));
+
+            if all_failed {
+                self.http_fallback_status = Some(Err("No external IP detected".to_string()));
             }
         }
 

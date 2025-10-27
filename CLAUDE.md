@@ -66,6 +66,7 @@ cargo fmt
 - `screens.rs` - All screen state structs (ShareContact, ImportContact, ChatList, ChatView, Settings, Diagnostics, StartupSync)
 - `app.rs` - Main App struct with business logic, automatic background connectivity on startup
 - `ui.rs` - Rendering functions (ratatui-based)
+- `clipboard.rs` - Clipboard abstraction trait (`ClipboardProvider`), real implementation (`RealClipboard`), mock for tests (`MockClipboard`)
 
 ## Data Structures
 
@@ -107,11 +108,12 @@ cargo fmt
 
 **Library (`src/tui/`)** - Reusable UI logic:
 - Used by TUI binary, future mobile/desktop UIs
-- Fully tested (120 TUI unit tests)
+- Fully tested (128 TUI unit tests)
 - Platform-agnostic business logic
 - Modular UI rendering (`ui/` directory with per-screen modules)
 - Background async connectivity via spawned threads with tokio runtime
 - Background retry worker for automatic message/ping queue processing
+- Clipboard abstraction with mocked testing (trait-based `ClipboardProvider`)
 
 **UI Module Structure (`src/tui/ui/`):**
 - `mod.rs` - Main `ui()` dispatcher and re-exports
@@ -121,7 +123,7 @@ cargo fmt
 - `chat_list.rs` - Chat list with delete confirmation popup
 - `chat_view.rs` - Individual chat conversation view
 - `settings.rs` - Settings configuration screen
-- `diagnostics.rs` - Network diagnostics with manual refresh (IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size, CGNAT detection)
+- `diagnostics.rs` - Network diagnostics with manual refresh (4 protocols: PCP/NAT-PMP/UPnP/HTTP fallback, IPv4/IPv6, external endpoint, mapping lifecycle, RTT, queue size, CGNAT detection)
 - `helpers.rs` - Shared UI utilities (`format_duration_until`)
 
 **Screens:**
@@ -131,7 +133,7 @@ cargo fmt
 4. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
 5. **ChatView** - Message history (scroll ↑↓), send with Enter, E2E encrypted messages
 6. **Settings** - Edit retry interval (1-1440 min, 4-digit max input), auto-save with toast
-7. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection, manual refresh (r/F5) triggers background async tests, smart color logic: failed attempts shown in yellow (warning) if any protocol succeeded, red (error) if all failed
+7. **Diagnostics** - Two-column layout: Protocol status (PCP/NAT-PMP/UPnP/HTTP fallback) + System info (IPv4/IPv6, external endpoint, mapping lifetime & renewal countdown, ping RTT, queue size), CGNAT detection, manual refresh (r/F5) triggers background async tests, smart color logic: failed attempts shown in yellow (warning) if any protocol succeeded, red (error) only if all 4 protocols failed (PCP, NAT-PMP, UPnP, HTTP)
 
 **Keyboard:**
 - Global: Esc=back, ↑↓/j/k=nav, Enter=select, d/Del=delete, Backspace/Delete for input
@@ -141,6 +143,13 @@ cargo fmt
 - Note: 'q' and 'b' keys only work on main menu. All other screens use Esc to go back.
 
 **Colors:** Cyan=titles, Green=success/active, Yellow=warning/pending, Red=error/expired, Gray=inactive
+
+**Clipboard Handling:**
+- ShareContact: 'c' key copies token to clipboard, 's' key saves to file
+- ImportContact: 'v' key pastes from clipboard, can type manually
+- Graceful degradation: When clipboard unavailable (SSH/remote), shows user-friendly error with alternative action (save to file / type manually)
+- Implementation: Trait-based abstraction (`ClipboardProvider`) with `RealClipboard` for production, `MockClipboard` for tests
+- Tests: All clipboard operations use mocks to avoid race conditions and platform dependencies
 
 ## Implementation Notes
 
@@ -320,7 +329,7 @@ cargo fmt
 - `app_state_tests.rs` (21 tests) - AppState (JSON/CBOR legacy methods + 10 new SQLite tests: save/load, messages, updates, migration, settings)
 - `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
 
-**`tui_tests/` (120 tests):**
+**`tui_tests/` (128 tests):**
 - `app_tests/` (42 tests) - App business logic, modularized by feature area:
   - `helpers.rs` - Shared test utilities
   - `initialization_tests.rs` (6 tests) - App creation, state loading, settings
@@ -329,13 +338,13 @@ cargo fmt
   - `chat_management_tests.rs` (14 tests) - Chat creation, deletion, selection
   - `messaging_tests.rs` (3 tests) - Message sending
   - `startup_tests.rs` (2 tests) - Startup screen, connectivity
-- `screen_tests/` (76 tests) - All screens, modularized by screen type (consent screen removed):
-  - `share_contact_tests.rs` (5 tests) - ShareContactScreen (token generation, file save)
-  - `import_contact_tests.rs` (10 tests) - ImportContactScreen (parsing, validation)
+- `screen_tests/` (84 tests) - All screens, modularized by screen type (consent screen removed):
+  - `share_contact_tests.rs` (8 tests) - ShareContactScreen (token generation, file save, clipboard mocking)
+  - `import_contact_tests.rs` (13 tests) - ImportContactScreen (parsing, validation, clipboard mocking)
   - `chat_list_tests.rs` (5 tests) - ChatListScreen (navigation, delete popup)
   - `chat_view_tests.rs` (3 tests) - ChatViewScreen (input, scrolling)
   - `settings_tests.rs` (10 tests) - SettingsScreen (validation, persistence, 4-digit max length)
-  - `diagnostics_tests.rs` (20 tests) - DiagnosticsScreen (IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size, CGNAT)
+  - `diagnostics_tests.rs` (25 tests) - DiagnosticsScreen (IPv4/IPv6, external endpoint, lifetime/renewal, RTT, queue size, CGNAT, HTTP fallback)
   - `status_indicators_tests.rs` (10 tests) - Status badges and contact expiry
   - `mod.rs` - Module organization
 - `types_tests.rs` (3 tests) - MenuItem enum

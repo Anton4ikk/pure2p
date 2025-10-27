@@ -53,6 +53,7 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
                 Constraint::Length(7),  // PCP status
                 Constraint::Length(5),  // NAT-PMP status
                 Constraint::Length(5),  // UPnP status
+                Constraint::Length(5),  // HTTP fallback status
                 Constraint::Min(3),     // Additional info / CGNAT warning
             ])
             .split(content_columns[0]);
@@ -71,7 +72,8 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
         // Determine if any mapping succeeded (for color logic)
         let any_success = screen.pcp_status.as_ref().map_or(false, |r| r.is_ok())
             || screen.natpmp_status.as_ref().map_or(false, |r| r.is_ok())
-            || screen.upnp_status.as_ref().map_or(false, |r| r.is_ok());
+            || screen.upnp_status.as_ref().map_or(false, |r| r.is_ok())
+            || screen.http_fallback_status.as_ref().map_or(false, |r| r.is_ok());
 
         // PCP Status
         let pcp_text = if let Some(result) = &screen.pcp_status {
@@ -314,6 +316,71 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
             .block(Block::default().borders(Borders::ALL).title("Universal Plug and Play (UPnP)"));
         f.render_widget(upnp_widget, left_chunks[2]);
 
+        // HTTP Fallback Status
+        let http_text = if let Some(result) = &screen.http_fallback_status {
+            match result {
+                Ok(mapping) => {
+                    vec![
+                        Line::from(Span::styled(
+                            "HTTP: ✓ IP Detected",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("External IP: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}", mapping.external_ip),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                    ]
+                }
+                Err(e) => {
+                    // Use error color - this means all 4 protocols failed
+                    vec![
+                        Line::from(Span::styled(
+                            "HTTP: ✗ Failed",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            format!("Error: {}", e),
+                            Style::default().fg(Color::Red),
+                        )),
+                    ]
+                }
+            }
+        } else if screen.is_refreshing && screen.upnp_status.is_some() {
+            vec![
+                Line::from(Span::styled(
+                    "HTTP: Testing...",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Detecting external IP...",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled(
+                    "HTTP: Not tested",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "IP detection fallback (after all NAT traversal)",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
+
+        let http_widget = Paragraph::new(http_text)
+            .alignment(Alignment::Left)
+            .block(Block::default().borders(Borders::ALL).title("HTTP IP Detection (Fallback)"));
+        f.render_widget(http_widget, left_chunks[3]);
+
         // Additional info / CGNAT warning (left column bottom)
         let mut info_text = vec![
             Line::from(vec![
@@ -346,7 +413,7 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
         let info_widget = Paragraph::new(info_text)
             .alignment(Alignment::Left)
             .block(Block::default().borders(Borders::ALL).title("Status"));
-        f.render_widget(info_widget, left_chunks[3]);
+        f.render_widget(info_widget, left_chunks[4]);
 
         // Right column: IPv4/IPv6 & External endpoint
         let ip_text = vec![
