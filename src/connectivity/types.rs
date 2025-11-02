@@ -96,6 +96,8 @@ pub struct ConnectivityResult {
     pub mapping: Option<PortMappingResult>,
     /// Whether CGNAT was detected (external IP in 100.64.0.0/10 range)
     pub cgnat_detected: bool,
+    /// Whether external reachability was verified (port is actually accessible)
+    pub externally_reachable: Option<bool>,
 }
 
 impl ConnectivityResult {
@@ -109,6 +111,7 @@ impl ConnectivityResult {
             http: StrategyAttempt::NotAttempted,
             mapping: None,
             cgnat_detected: false,
+            externally_reachable: None,
         }
     }
 

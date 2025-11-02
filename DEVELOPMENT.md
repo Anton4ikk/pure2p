@@ -60,7 +60,7 @@ src/
 │   └── storage_db.rs   # SQLite storage backend (schema + CRUD)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
-│   ├── types.rs        # Common types (PortMappingResult, MappingProtocol, MappingError, etc.)
+│   ├── types.rs        # Common types (PortMappingResult, MappingProtocol, MappingError, ConnectivityResult with externally_reachable)
 │   ├── gateway.rs      # Cross-platform gateway discovery
 │   ├── pcp.rs          # PCP (Port Control Protocol, RFC 6887)
 │   ├── natpmp.rs       # NAT-PMP (RFC 6886)
@@ -68,7 +68,8 @@ src/
 │   ├── ipv6.rs         # IPv6 direct connectivity detection
 │   ├── http_ip.rs      # HTTP-based external IP detection (fallback)
 │   ├── cgnat.rs        # CGNAT detection (RFC 6598, 100.64.0.0/10)
-│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP→HTTP
+│   ├── health_check.rs # External reachability verification (verify_external_reachability, ReachabilityStatus)
+│   ├── orchestrator.rs # establish_connectivity(), verify_connectivity_health() - IPv6→PCP→NAT-PMP→UPnP→HTTP + health check
 │   └── manager.rs      # PortMappingManager, UpnpMappingManager
 ├── tui/                # TUI module (library)
 │   ├── mod.rs          # Module exports
@@ -86,14 +87,14 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (395 tests)
+├── tests/              # Unit tests (403 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
-│   ├── transport_tests.rs
+│   ├── transport_tests.rs     # Includes /health endpoint tests
 │   ├── queue_tests.rs
 │   ├── messaging_tests.rs
-│   ├── connectivity_tests.rs  # Includes CGNAT detection
+│   ├── connectivity_tests.rs  # Includes CGNAT detection + health check verification
 │   ├── lib_tests.rs
 │   ├── storage_tests/  # Storage module tests (66 tests)
 │   │   ├── mod.rs
@@ -141,7 +142,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (395 total)
+cargo test                     # All tests (403 total)
 
 # Quality
 cargo fmt                      # Format
@@ -185,10 +186,10 @@ git push origin feature/name
 src/tests/
 ├── crypto_tests.rs       (27 tests)  - Keypair, signing, UID, X25519 ECDH, AEAD encryption, token signing
 ├── protocol_tests.rs     (25 tests)  - Envelopes, serialization, E2E encryption
-├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
+├── transport_tests.rs    (31 tests)  - HTTP (/output, /ping, /message, /health), peers, delivery, health check integration
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
-├── connectivity_tests.rs (38 tests)  - PCP, NAT-PMP, UPnP, IPv6, HTTP IP detection, CGNAT detection
+├── connectivity_tests.rs (49 tests)  - PCP, NAT-PMP, UPnP, IPv6, HTTP IP detection, CGNAT detection, health check verification, reachability status
 ├── lib_tests.rs          (1 test)    - Library init
 ├── storage_tests/        (66 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
@@ -305,6 +306,20 @@ sudo apt-get install pkg-config libssl-dev
 - Retry worker automatically keeps trying to ping them
 - Chat will auto-transition to Active when ping finally succeeds
 - Check queue size in diagnostics (press `n`) to see pending messages
+
+**Diagnostics shows "✗ Not reachable" even though UPnP/PCP succeeded:**
+- Port mapping created but port is not externally reachable
+- Possible causes:
+  - Router firewall blocking the port despite successful mapping
+  - Router silently rejected the mapping (reported success but didn't create mapping)
+  - Behind CGNAT (check for 100.64.x.x IP range warning)
+  - ISP blocking incoming connections
+- Solutions:
+  - Check router's port forwarding table (web admin) to verify mapping exists
+  - Try manual port forwarding configuration in router settings
+  - Contact ISP if behind CGNAT (may need VPN or relay server)
+  - Try a different port number
+- Note: If testing from same network, health check may fail even if port is actually reachable externally
 
 ---
 

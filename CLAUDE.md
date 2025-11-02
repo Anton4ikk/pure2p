@@ -173,10 +173,11 @@ cargo fmt
 
 ### Transport
 - Hyper HTTP/1.1 server/client
-- Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new)
+- Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new), `/health` (connectivity verification)
 - Handlers: MessageHandler (legacy), NewMessageHandler (AppState), PingHandler (auto-import contacts)
 - **PingRequest**: `{contact_token: String}` - signed contact token (base64 CBOR) sent on import
 - **PingResponse**: `{uid: String, status: String}` - confirms peer is online
+- **Health Endpoint**: `GET /health` returns "ok" - used for external reachability verification
 - **Automatic two-way exchange**:
   1. Alice imports Bob → creates chat (⌛ Pending) → sends ping with Alice's token
   2. Bob receives ping → parses token → auto-imports Alice → creates chat (● Active) → responds "ok"
@@ -266,8 +267,8 @@ cargo fmt
 
 ### Connectivity
 
-**Module Architecture** (11 files, ~90-400 lines each):
-- `types.rs` - Shared types: PortMappingResult, MappingProtocol (PCP/NATPMP/UPnP/IPv6/Direct/Manual), MappingError, ConnectivityResult (with cgnat_detected field), StrategyAttempt, IpProtocol
+**Module Architecture** (12 files, ~90-400 lines each):
+- `types.rs` - Shared types: PortMappingResult, MappingProtocol (PCP/NATPMP/UPnP/IPv6/Direct/Manual), MappingError, ConnectivityResult (with cgnat_detected and externally_reachable fields), StrategyAttempt, IpProtocol
 - `gateway.rs` - Cross-platform gateway discovery (Linux/macOS/Windows)
 - `pcp.rs` - PCP implementation with PcpOpcode, PcpResultCode enums
 - `natpmp.rs` - NAT-PMP implementation with NatPmpOpcode, NatPmpResultCode enums
@@ -275,13 +276,14 @@ cargo fmt
 - `ipv6.rs` - IPv6 detection helpers (check_ipv6_connectivity, is_ipv6_link_local)
 - `http_ip.rs` - HTTP-based external IP detection using public services (api.ipify.org, ifconfig.me, icanhazip.com, checkip.amazonaws.com)
 - `cgnat.rs` - CGNAT detection: detect_cgnat(ip) checks 100.64.0.0/10 range, is_private_ip(ip) helper
-- `orchestrator.rs` - Main `establish_connectivity()` function
+- `health_check.rs` - External reachability verification (verify_external_reachability, ReachabilityStatus enum)
+- `orchestrator.rs` - Main `establish_connectivity()` and `verify_connectivity_health()` functions
 - `manager.rs` - PortMappingManager (PCP), UpnpMappingManager (UPnP)
 - `mod.rs` - Public API with re-exports
 
 **Orchestrator Behavior**:
 - `establish_connectivity(port)` tries IPv6 → PCP → NAT-PMP → UPnP → HTTP IP detection sequentially
-- Returns `ConnectivityResult` with full tracking of all attempts + CGNAT detection
+- Returns `ConnectivityResult` with full tracking of all attempts + CGNAT detection + reachability status
 - Each protocol gets `StrategyAttempt`: NotAttempted | Success(mapping) | Failed(error)
 - Stops on first success, continues through all on failure
 - **HTTP fallback**: When all NAT traversal fails, queries public IP services to detect external IP (creates mapping with `protocol: Direct`, `lifetime_secs: 0`)
@@ -290,6 +292,11 @@ cargo fmt
 - **Automatic on startup**: TUI triggers connectivity test in background thread on app launch
 - **Manual refresh**: Diagnostics screen 'r'/F5 keys trigger new background test
 - Results stored in `App.connectivity_result`, external IP auto-updates `App.local_ip`
+- **Health check verification**: After connectivity established + transport server started (2s delay), automatically tests external reachability via GET /health endpoint
+  - `verify_connectivity_health(result)` updates `ConnectivityResult.externally_reachable` field
+  - `None` = not tested, `Some(true)` = confirmed reachable, `Some(false)` = port blocked/unreachable
+  - Logs helpful diagnostics: firewall, CGNAT, silent mapping failure, or testing from same NAT
+  - Diagnostics screen shows real-time status: Green "✓ Reachable" or Red "✗ Not reachable"
 
 **Protocol Details**:
 - **PCP** (RFC 6887): 60-byte MAP requests, up to 1100-byte responses, UDP port 5351
@@ -316,10 +323,10 @@ cargo fmt
 **Test Organization:**
 - `crypto_tests.rs` (27 tests) - Keypair generation, signing, UID derivation, X25519 shared secret, AEAD encryption (roundtrip, tampering), token signing (valid, invalid, corrupted)
 - `protocol_tests.rs` (25 tests) - Message envelope serialization, versioning, E2E encryption (roundtrip, wrong key, CBOR/JSON, plaintext vs encrypted)
-- `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
+- `transport_tests.rs` (31 tests) - HTTP endpoints (/output, /ping, /message, /health), peer management, delivery, health check integration
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (38 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT, HTTP IP detection
+- `connectivity_tests.rs` (49 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT, HTTP IP detection, health check verification, reachability status
 - `lib_tests.rs` (1 test) - Library initialization
 
 **`storage_tests/` (66 tests):**

@@ -78,6 +78,7 @@ fn test_main_menu_hides_warning_after_connectivity() {
         upnp: crate::connectivity::StrategyAttempt::NotAttempted,
         http: crate::connectivity::StrategyAttempt::NotAttempted,
         cgnat_detected: false,
+        externally_reachable: None,
     };
     app.connectivity_result = Some(mock_result);
 
@@ -109,6 +110,7 @@ fn test_main_menu_warning_logic_with_successful_mapping() {
         upnp: crate::connectivity::StrategyAttempt::NotAttempted,
         http: crate::connectivity::StrategyAttempt::NotAttempted,
         cgnat_detected: false,
+        externally_reachable: Some(true),
     };
 
     app.connectivity_result = Some(result_with_mapping);

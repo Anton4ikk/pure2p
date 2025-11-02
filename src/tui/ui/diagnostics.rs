@@ -416,7 +416,7 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
         f.render_widget(info_widget, left_chunks[4]);
 
         // Right column: IPv4/IPv6 & External endpoint
-        let ip_text = vec![
+        let mut ip_text = vec![
             Line::from(vec![
                 Span::styled("IPv4: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -440,6 +440,24 @@ pub fn render_diagnostics(f: &mut Frame, app: &App) {
                 ),
             ]),
         ];
+
+        // Add reachability status if available
+        if let Some(result) = &app.connectivity_result {
+            if let Some(reachable) = result.externally_reachable {
+                let (status_text, status_color) = if reachable {
+                    ("✓ Reachable", Color::Green)
+                } else {
+                    ("✗ Not reachable", Color::Red)
+                };
+                ip_text.push(Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        status_text,
+                        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+        }
 
         let ip_widget = Paragraph::new(ip_text)
             .alignment(Alignment::Left)

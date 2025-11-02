@@ -634,6 +634,16 @@ async fn handle_request(
                 }
             }
         }
+        (&Method::GET, "/health") => {
+            debug!("Received GET /health request");
+
+            // Simple health check endpoint for external connectivity verification
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/plain")
+                .body(Full::new(Bytes::from("ok")))
+                .unwrap())
+        }
         _ => {
             debug!("Received unsupported request: {} {}", req.method(), req.uri().path());
             Ok(Response::builder()

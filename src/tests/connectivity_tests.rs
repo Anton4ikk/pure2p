@@ -629,3 +629,205 @@ fn test_all_mapping_protocols_unique() {
         assert!(serialized.insert(json), "Each protocol should serialize uniquely");
     }
 }
+
+// ============================================================================
+// Health Check Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_verify_external_reachability_unreachable_ip() {
+    use crate::connectivity::health_check::{verify_external_reachability, ReachabilityStatus};
+
+    // Test with unreachable IP (TEST-NET-2 range)
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+        external_port: 9999,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::UPnP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let result = verify_external_reachability(&mapping, 2).await;
+
+    // Should be unreachable
+    match result {
+        ReachabilityStatus::Unreachable => {
+            // Expected result
+        }
+        ReachabilityStatus::TestFailed(_) => {
+            // Also acceptable (network conditions may vary)
+        }
+        ReachabilityStatus::Reachable => {
+            panic!("Unreachable IP should not return Reachable status");
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_verify_external_reachability_localhost() {
+    use crate::connectivity::health_check::{verify_external_reachability, ReachabilityStatus};
+
+    // Test with localhost
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        external_port: 1,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let result = verify_external_reachability(&mapping, 2).await;
+
+    // Should be unreachable or test failed
+    assert!(
+        matches!(result, ReachabilityStatus::Unreachable | ReachabilityStatus::TestFailed(_)),
+        "Localhost should not be externally reachable"
+    );
+}
+
+#[tokio::test]
+async fn test_verify_connectivity_health_with_mapping() {
+    use crate::connectivity::orchestrator::verify_connectivity_health;
+
+    // Create a result with a mapping
+    let mut result = ConnectivityResult::new();
+    result.mapping = Some(PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 50)),
+        external_port: 54321,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::PCP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    });
+    result.pcp = StrategyAttempt::Success(result.mapping.clone().unwrap());
+
+    let verified_result = verify_connectivity_health(result).await;
+
+    // Should have externally_reachable set (either true or false)
+    assert!(
+        verified_result.externally_reachable.is_some(),
+        "Health check should set externally_reachable field"
+    );
+}
+
+#[tokio::test]
+async fn test_verify_connectivity_health_no_mapping() {
+    use crate::connectivity::orchestrator::verify_connectivity_health;
+
+    // Create a result without a mapping
+    let result = ConnectivityResult::new();
+
+    let verified_result = verify_connectivity_health(result).await;
+
+    // Should mark as not reachable
+    assert_eq!(
+        verified_result.externally_reachable,
+        Some(false),
+        "No mapping should result in externally_reachable = false"
+    );
+}
+
+#[test]
+fn test_connectivity_result_with_reachability() {
+    // Test ConnectivityResult with externally_reachable field
+    let mut result = ConnectivityResult::new();
+    assert_eq!(result.externally_reachable, None, "Should start as None");
+
+    // Set to reachable
+    result.externally_reachable = Some(true);
+    assert_eq!(result.externally_reachable, Some(true));
+
+    // Set to not reachable
+    result.externally_reachable = Some(false);
+    assert_eq!(result.externally_reachable, Some(false));
+}
+
+#[test]
+fn test_connectivity_result_serialization_with_reachability() {
+    // Test that ConnectivityResult serializes correctly with externally_reachable
+    let mut result = ConnectivityResult::new();
+    result.externally_reachable = Some(true);
+    result.cgnat_detected = true;
+
+    // Serialize to JSON
+    let json = serde_json::to_string(&result).expect("Should serialize");
+    assert!(json.contains("externally_reachable"), "JSON should contain externally_reachable field");
+    assert!(json.contains("true"), "JSON should contain true value");
+
+    // Deserialize back
+    let deserialized: ConnectivityResult = serde_json::from_str(&json).expect("Should deserialize");
+    assert_eq!(deserialized.externally_reachable, Some(true));
+    assert_eq!(deserialized.cgnat_detected, true);
+}
+
+#[tokio::test]
+async fn test_reachability_status_enum() {
+    use crate::connectivity::ReachabilityStatus;
+
+    // Test all enum variants
+    let reachable = ReachabilityStatus::Reachable;
+    let unreachable = ReachabilityStatus::Unreachable;
+    let test_failed = ReachabilityStatus::TestFailed("error message".to_string());
+
+    // Verify they're different
+    assert!(matches!(reachable, ReachabilityStatus::Reachable));
+    assert!(matches!(unreachable, ReachabilityStatus::Unreachable));
+    assert!(matches!(test_failed, ReachabilityStatus::TestFailed(_)));
+
+    // Verify error message is preserved
+    if let ReachabilityStatus::TestFailed(msg) = test_failed {
+        assert_eq!(msg, "error message");
+    }
+}
+
+#[test]
+fn test_connectivity_result_is_success_independent_of_reachability() {
+    // Test that is_success() only checks for mapping, not reachability
+    let mut result = ConnectivityResult::new();
+    assert!(!result.is_success(), "Should not be success without mapping");
+
+    // Add mapping
+    result.mapping = Some(PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        external_port: 8080,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::UPnP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    });
+
+    assert!(result.is_success(), "Should be success with mapping");
+
+    // Even if not reachable, is_success should still be true
+    result.externally_reachable = Some(false);
+    assert!(result.is_success(), "is_success should ignore reachability status");
+}
+
+#[tokio::test]
+async fn test_health_check_timeout() {
+    use crate::connectivity::health_check::{verify_external_reachability, ReachabilityStatus};
+
+    // Test with a non-routable IP (should timeout quickly)
+    let mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), // TEST-NET-1
+        external_port: 9999,
+        lifetime_secs: 3600,
+        protocol: MappingProtocol::NATPMP,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let start = std::time::Instant::now();
+    let result = verify_external_reachability(&mapping, 2).await;
+    let elapsed = start.elapsed();
+
+    // Should complete within reasonable time (timeout + margin)
+    assert!(
+        elapsed.as_secs() <= 5,
+        "Health check should respect timeout (took {:?})",
+        elapsed
+    );
+
+    // Should be unreachable or test failed
+    assert!(
+        matches!(result, ReachabilityStatus::Unreachable | ReachabilityStatus::TestFailed(_)),
+        "Non-routable IP should not be reachable"
+    );
+}

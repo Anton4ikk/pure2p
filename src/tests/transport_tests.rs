@@ -4,7 +4,7 @@ use crate::protocol::MessageEnvelope;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{sleep, Duration};
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{Full, BodyExt};
 use hyper::{Method, Request, StatusCode};
 use hyper_util::client::legacy::Client;
 use tokio::sync::Mutex;
@@ -737,4 +737,219 @@ async fn test_message_bidirectional() {
     assert_eq!(msgs2.len(), 1);
     assert_eq!(msgs2[0].from_uid, "peer1");
     assert_eq!(msgs2[0].payload, b"Hello from 1");
+}
+
+// ============================================================================
+// Health Endpoint Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_health_endpoint_get() {
+    // Start a transport server
+    let mut transport = Transport::new();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    transport.start(addr).await.unwrap();
+
+    let local_addr = transport.local_addr().unwrap();
+
+    // Give server time to start
+    sleep(Duration::from_millis(100)).await;
+
+    // Create HTTP client
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    // Test GET /health
+    let url = format!("http://{}/health", local_addr);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(&url)
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Read response body
+    let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+    assert_eq!(body_str, "ok");
+}
+
+#[tokio::test]
+async fn test_health_endpoint_head_not_supported() {
+    // Start a transport server
+    let mut transport = Transport::new();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    transport.start(addr).await.unwrap();
+
+    let local_addr = transport.local_addr().unwrap();
+
+    // Give server time to start
+    sleep(Duration::from_millis(100)).await;
+
+    // Create HTTP client
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    // Test HEAD /health (should return 404 - only GET is supported)
+    let url = format!("http://{}/health", local_addr);
+    let req = Request::builder()
+        .method(Method::HEAD)
+        .uri(&url)
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_health_endpoint_post_not_supported() {
+    // Start a transport server
+    let mut transport = Transport::new();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    transport.start(addr).await.unwrap();
+
+    let local_addr = transport.local_addr().unwrap();
+
+    // Give server time to start
+    sleep(Duration::from_millis(100)).await;
+
+    // Create HTTP client
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    // Test POST /health (should return 404 - only GET is supported)
+    let url = format!("http://{}/health", local_addr);
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(&url)
+        .body(Full::new(Bytes::from("test")))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_health_endpoint_multiple_requests() {
+    // Start a transport server
+    let mut transport = Transport::new();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    transport.start(addr).await.unwrap();
+
+    let local_addr = transport.local_addr().unwrap();
+
+    // Give server time to start
+    sleep(Duration::from_millis(100)).await;
+
+    // Create HTTP client
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    // Make multiple health check requests in parallel
+    let mut handles = vec![];
+    for _ in 0..10 {
+        let url = format!("http://{}/health", local_addr);
+        let client_clone = client.clone();
+
+        let handle = tokio::spawn(async move {
+            let req = Request::builder()
+                .method(Method::GET)
+                .uri(&url)
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+
+            let response = client_clone.request(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+
+            let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+            assert_eq!(body_str, "ok");
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all requests to complete
+    for handle in handles {
+        handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_health_endpoint_with_other_endpoints() {
+    // Start a transport server
+    let mut transport = Transport::new();
+    transport.set_local_uid("test_uid".to_string()).await;
+    let addr = "127.0.0.1:0".parse().unwrap();
+    transport.start(addr).await.unwrap();
+
+    let local_addr = transport.local_addr().unwrap();
+
+    // Set up message handler
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let messages_clone = messages.clone();
+
+    transport.set_new_message_handler(move |msg| {
+        let messages = messages_clone.clone();
+        tokio::spawn(async move {
+            let mut msgs = messages.lock().await;
+            msgs.push(msg);
+        });
+    }).await;
+
+    // Give server time to start
+    sleep(Duration::from_millis(100)).await;
+
+    // Create HTTP client
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    // Test 1: Health check
+    let url = format!("http://{}/health", local_addr);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(&url)
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Test 2: Send a message to /message
+    let msg_req = MessageRequest {
+        from_uid: "sender".to_string(),
+        message_type: "text".to_string(),
+        payload: b"test message".to_vec(),
+    };
+
+    let cbor_data = serde_cbor::to_vec(&msg_req).unwrap();
+    let url = format!("http://{}/message", local_addr);
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(&url)
+        .header("Content-Type", "application/cbor")
+        .body(Full::new(Bytes::from(cbor_data)))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Test 3: Health check again
+    let url = format!("http://{}/health", local_addr);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(&url)
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify message was received
+    sleep(Duration::from_millis(100)).await;
+    let msgs = messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].from_uid, "sender");
 }

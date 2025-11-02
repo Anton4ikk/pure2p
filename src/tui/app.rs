@@ -372,6 +372,29 @@ impl App {
                             self.app_state.user_ip = Some(detected_ip);
                             self.app_state.user_port = mapping.external_port;
                             let _ = self.save_state();
+
+                            // Run health check AFTER transport server has started (give it 1 second)
+                            // This verifies that our port is actually reachable from external networks
+                            tracing::info!("Scheduling external reachability health check...");
+                            let result_for_health = result.clone();
+                            std::thread::spawn(move || {
+                                // Wait for transport server to fully start
+                                std::thread::sleep(std::time::Duration::from_secs(2));
+
+                                let runtime = tokio::runtime::Runtime::new().unwrap();
+                                let verified_result = runtime.block_on(async {
+                                    crate::connectivity::verify_connectivity_health(result_for_health).await
+                                });
+
+                                if verified_result.externally_reachable == Some(true) {
+                                    tracing::info!("✓ External reachability confirmed - you can receive messages!");
+                                } else if verified_result.externally_reachable == Some(false) {
+                                    tracing::warn!("✗ Port is NOT reachable from external networks");
+                                    tracing::warn!("   You may need to manually configure port forwarding on your router");
+                                } else {
+                                    tracing::warn!("⚠ Health check inconclusive");
+                                }
+                            });
                         }
                         self.connectivity_result = Some(result.clone());
 
