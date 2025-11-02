@@ -90,6 +90,8 @@ pub struct ConnectivityResult {
     pub natpmp: StrategyAttempt,
     /// UPnP attempt result
     pub upnp: StrategyAttempt,
+    /// HTTP IP detection attempt result (fallback)
+    pub http: StrategyAttempt,
     /// Final successful mapping (if any)
     pub mapping: Option<PortMappingResult>,
     /// Whether CGNAT was detected (external IP in 100.64.0.0/10 range)
@@ -104,6 +106,7 @@ impl ConnectivityResult {
             pcp: StrategyAttempt::NotAttempted,
             natpmp: StrategyAttempt::NotAttempted,
             upnp: StrategyAttempt::NotAttempted,
+            http: StrategyAttempt::NotAttempted,
             mapping: None,
             cgnat_detected: false,
         }
@@ -145,6 +148,12 @@ impl ConnectivityResult {
             StrategyAttempt::NotAttempted => parts.push("UPnP: not tried".to_string()),
             StrategyAttempt::Success(_) => parts.push("UPnP: ok".to_string()),
             StrategyAttempt::Failed(e) => parts.push(format!("UPnP: {}", e)),
+        }
+
+        match &self.http {
+            StrategyAttempt::NotAttempted => parts.push("HTTP: not tried".to_string()),
+            StrategyAttempt::Success(_) => parts.push("HTTP: ok".to_string()),
+            StrategyAttempt::Failed(e) => parts.push(format!("HTTP: {}", e)),
         }
 
         parts.join(" → ")

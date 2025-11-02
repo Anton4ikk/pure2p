@@ -140,6 +140,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
             };
 
             result.cgnat_detected = detect_cgnat(external_ip);
+            result.http = StrategyAttempt::Success(mapping.clone());
             result.mapping = Some(mapping);
 
             info!("Connectivity established via HTTP IP detection (direct mode, no NAT mapping)");
@@ -147,6 +148,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
         }
         Err(e) => {
             error!("HTTP IP detection failed: {}", e);
+            result.http = StrategyAttempt::Failed(e.to_string());
         }
     }
 

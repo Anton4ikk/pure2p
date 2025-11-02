@@ -585,6 +585,16 @@ impl DiagnosticsScreen {
             crate::connectivity::StrategyAttempt::NotAttempted => {}
         }
 
+        match &result.http {
+            crate::connectivity::StrategyAttempt::Success(mapping) => {
+                self.http_fallback_status = Some(Ok(mapping.clone()));
+            }
+            crate::connectivity::StrategyAttempt::Failed(e) => {
+                self.http_fallback_status = Some(Err(e.clone()));
+            }
+            crate::connectivity::StrategyAttempt::NotAttempted => {}
+        }
+
         // Update external endpoint from successful mapping
         if let Some(mapping) = &result.mapping {
             self.external_endpoint = Some(format!("{}:{}", mapping.external_ip, mapping.external_port));
@@ -594,21 +604,6 @@ impl DiagnosticsScreen {
                 self.ipv4_address = Some(mapping.external_ip.to_string());
             } else if mapping.external_ip.is_ipv6() {
                 self.ipv6_address = Some(mapping.external_ip.to_string());
-            }
-
-            // Check if this is HTTP fallback (when all NAT traversal failed)
-            if mapping.protocol == crate::connectivity::MappingProtocol::Direct {
-                // This is HTTP fallback - all NAT traversal methods failed
-                self.http_fallback_status = Some(Ok(mapping.clone()));
-            }
-        } else {
-            // No successful mapping at all - HTTP fallback also failed
-            let all_failed = matches!(result.pcp, crate::connectivity::StrategyAttempt::Failed(_))
-                && matches!(result.natpmp, crate::connectivity::StrategyAttempt::Failed(_))
-                && matches!(result.upnp, crate::connectivity::StrategyAttempt::Failed(_));
-
-            if all_failed {
-                self.http_fallback_status = Some(Err("No external IP detected".to_string()));
             }
         }
 

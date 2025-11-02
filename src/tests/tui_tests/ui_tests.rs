@@ -76,6 +76,7 @@ fn test_main_menu_hides_warning_after_connectivity() {
         pcp: crate::connectivity::StrategyAttempt::NotAttempted,
         natpmp: crate::connectivity::StrategyAttempt::NotAttempted,
         upnp: crate::connectivity::StrategyAttempt::NotAttempted,
+        http: crate::connectivity::StrategyAttempt::NotAttempted,
         cgnat_detected: false,
     };
     app.connectivity_result = Some(mock_result);
@@ -106,6 +107,7 @@ fn test_main_menu_warning_logic_with_successful_mapping() {
         ipv6: crate::connectivity::StrategyAttempt::NotAttempted,
         natpmp: crate::connectivity::StrategyAttempt::NotAttempted,
         upnp: crate::connectivity::StrategyAttempt::NotAttempted,
+        http: crate::connectivity::StrategyAttempt::NotAttempted,
         cgnat_detected: false,
     };
 
