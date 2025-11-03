@@ -75,7 +75,7 @@ src/
 │   ├── mod.rs          # Module exports
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
-│   ├── app.rs          # App business logic with automatic background connectivity and retry worker
+│   ├── app.rs          # App business logic with transport server (persistent runtime), background connectivity, and retry worker
 │   ├── clipboard.rs    # Clipboard abstraction (ClipboardProvider trait, RealClipboard, MockClipboard)
 │   └── ui/             # Modular rendering (8 files - StartupSync screen removed)
 │       ├── mod.rs      # Main ui() dispatcher
@@ -127,7 +127,7 @@ src/
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
-    └── tui.rs          # TUI binary (thin wrapper, starts transport server, triggers connectivity, retry worker starts after connectivity)
+    └── tui.rs          # TUI binary (thin wrapper, starts persistent transport server FIRST, then triggers connectivity, retry worker starts after connectivity)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.
@@ -386,6 +386,23 @@ sudo apt-get install pkg-config libssl-dev
   - Contact ISP if behind CGNAT (may need VPN or relay server)
   - Try a different port number
 - Note: If testing from same network, health check may fail even if port is actually reachable externally
+
+**Cannot receive messages from peers on different networks:**
+- Symptom: Peers get "Connection refused" when trying to ping/message you
+- Root cause: Transport server may not be listening (check with `curl http://127.0.0.1:<PORT>/health`)
+- Common causes:
+  - **Tokio runtime dropped**: Server thread exits after setup completes (FIXED in v0.3.0+)
+  - Firewall blocking the port
+  - Wrong IP:port shared in contact token
+- Debug steps:
+  1. Check server is running locally: `curl http://127.0.0.1:<YOUR_PORT>/health`
+  2. Check request logs: `sqlite3 app_data/pure2p.db "SELECT * FROM request_logs ORDER BY timestamp DESC LIMIT 5;"`
+  3. Verify external IP in diagnostics screen (press `n`)
+  4. Test external reachability: Ask peer to `curl http://<YOUR_EXTERNAL_IP>:<PORT>/health`
+- Architecture notes:
+  - Transport server MUST start before connectivity detection
+  - Server MUST stay running independently of connectivity results
+  - Tokio runtime kept alive via oneshot channel that never completes
 
 ---
 

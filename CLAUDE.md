@@ -92,7 +92,14 @@ cargo fmt
 - `local_port` - Port for listening and connectivity tests (smart selection: reuses saved port when IP unchanged, generates new random port 49152-65535 when IP changes or first run)
 - `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
 - Startup: Migrates legacy JSON if exists, loads all data from SQLite, starts transport server with auto-retry (up to 10 attempts), runs `establish_connectivity()` in background
-- Transport: Runs HTTP server in background thread with automatic port retry and health verification. If preferred port fails, tries up to 10 random ports. Verifies server is listening via local `/health` check. Saves actual running port to database. Handlers create new SQLite connections to persist incoming pings/messages
+- Transport Server Lifecycle: **Critical - server starts FIRST and runs independently of connectivity**
+  - Starts in dedicated thread with persistent tokio runtime (kept alive via oneshot channel)
+  - Binds to preferred port or tries up to 10 random ports (49152-65535) if unavailable
+  - Verifies server listening via local `/health` check after each bind attempt
+  - Saves actual running port to database for next restart
+  - **Stays running until app exit**, independent of connectivity success/failure
+  - Handlers create new SQLite connections to persist incoming pings/messages
+  - Connectivity detection runs AFTER server starts, uses actual running port for port mappings
 - State Reload: Automatically reloads from SQLite when navigating (chat list, chat view, main menu) to pick up transport handler changes
 - ShareContact: Uses detected external IP for accurate contact tokens
 - ImportContact: Automatically sends ping to imported contact to notify them, marks chat as active when ping response received
@@ -184,14 +191,17 @@ cargo fmt
 - **PingRequest**: `{contact_token: String}` - signed contact token (base64 CBOR) sent on import
 - **PingResponse**: `{uid: String, status: String}` - confirms peer is online
 - **Health Endpoint**: `GET /health` returns "ok" - used for external reachability verification
-- **Server Startup with Automatic Retry**:
-  - Attempts to bind to preferred port (saved in database or newly generated)
-  - If bind fails: automatically tries up to 10 random ports (49152-65535 range)
-  - Each attempt includes 100ms initialization wait + local `/health` endpoint verification
-  - Actual running port is saved to database if different from preferred port
-  - Status tracked via `TransportServerStatus` enum: NotStarted → Starting → Running(port) or Failed(error)
-  - User sees cyan "Starting..." → green (no notification) or red "Failed: [error]" on main menu
-  - Connectivity check waits for server to be Running before testing NAT traversal
+- **Server Lifecycle (Critical Architecture)**:
+  1. **Startup**: Server starts FIRST in dedicated thread with persistent tokio runtime
+  2. **Runtime persistence**: Tokio runtime kept alive via oneshot channel (blocks on `rx.await` that never receives)
+  3. **Port binding**: Attempts preferred port (from database), tries up to 10 random ports (49152-65535) if unavailable
+  4. **Verification**: Each bind attempt verified via local `/health` check (100ms wait + GET request)
+  5. **Database sync**: Actual running port saved to database for next restart
+  6. **Status tracking**: `TransportServerStatus` enum: NotStarted → Starting → Running(port) or Failed(error)
+  7. **Independence**: Server runs until app exit, **independent of connectivity success/failure**
+  8. **Connectivity order**: Connectivity detection waits for server to be Running, then uses actual port for NAT traversal
+  9. **UI feedback**: Cyan "Starting..." → green (silent) or red "Failed: [error]" on main menu
+- **Why runtime persistence matters**: Without keeping runtime alive, spawned server task would be dropped when setup completes, causing "Connection refused" for all incoming requests
 - **Automatic two-way exchange**:
   1. Alice imports Bob → creates chat (⌛ Pending) → sends ping with Alice's token
   2. Bob receives ping → parses token → auto-imports Alice → creates chat (● Active) → responds "ok"

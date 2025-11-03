@@ -50,7 +50,7 @@ fn test_app_creates_state_on_first_run() {
         .expect("Failed to create app");
 
     // App state should be initialized with defaults
-    assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
+    assert_eq!(app.app_state.settings.retry_interval_minutes, 1,
         "Should have default retry interval");
     assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
         "Should have default contact expiry");
@@ -94,7 +94,7 @@ fn test_app_falls_back_to_defaults_on_corrupt_state() {
         .expect("Failed to create app");
 
     // Verify default state is used (fresh database)
-    assert_eq!(app.app_state.settings.retry_interval_minutes, 10,
+    assert_eq!(app.app_state.settings.retry_interval_minutes, 1,
         "Should use default retry interval");
     assert_eq!(app.app_state.settings.default_contact_expiry_days, 30,
         "Should use default contact expiry");

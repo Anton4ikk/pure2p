@@ -14,8 +14,8 @@ fn test_settings_default() {
     assert_eq!(settings.max_message_retries, 5);
     assert_eq!(settings.retry_base_delay_ms, 1000);
     assert!(settings.enable_notifications);
-    assert_eq!(settings.global_retry_interval_ms, 600_000); // 10 minutes
-    assert_eq!(settings.retry_interval_minutes, 10);
+    assert_eq!(settings.global_retry_interval_ms, 60_000); // 1 minute
+    assert_eq!(settings.retry_interval_minutes, 1);
     assert_eq!(settings.storage_path, "./data");
 }
 
@@ -23,8 +23,8 @@ fn test_settings_default() {
 fn test_settings_global_retry_interval() {
     let mut settings = Settings::default();
 
-    // Default should be 10 minutes (600,000 ms)
-    assert_eq!(settings.get_global_retry_interval_ms(), 600_000);
+    // Default should be 1 minute (60,000 ms)
+    assert_eq!(settings.get_global_retry_interval_ms(), 60_000);
 
     // Update to 5 minutes
     settings.set_global_retry_interval_ms(300_000);
@@ -97,7 +97,7 @@ fn test_settings_load_nonexistent() {
     // Load from nonexistent file should return defaults
     let settings = Settings::load(&path).expect("Failed to load settings");
 
-    assert_eq!(settings.retry_interval_minutes, 10);
+    assert_eq!(settings.retry_interval_minutes, 1);
     assert_eq!(settings.storage_path, "./data");
 }
 
@@ -109,7 +109,7 @@ fn test_settings_load_empty_file() {
     // File exists but is empty - should return defaults
     let settings = Settings::load(path).expect("Failed to load settings");
 
-    assert_eq!(settings.retry_interval_minutes, 10);
+    assert_eq!(settings.retry_interval_minutes, 1);
     assert_eq!(settings.storage_path, "./data");
     assert_eq!(settings.max_message_retries, 5);
 }
@@ -168,8 +168,8 @@ fn test_settings_set_global_retry_interval_ms() {
 fn test_settings_get_retry_intervals() {
     let settings = Settings::default();
 
-    assert_eq!(settings.get_retry_interval_minutes(), 10);
-    assert_eq!(settings.get_global_retry_interval_ms(), 600_000);
+    assert_eq!(settings.get_retry_interval_minutes(), 1);
+    assert_eq!(settings.get_global_retry_interval_ms(), 60_000);
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn test_settings_json_format() {
 
     // Verify the JSON can be deserialized
     let parsed: Settings = serde_json::from_str(&json).expect("Failed to parse JSON");
-    assert_eq!(parsed.retry_interval_minutes, 10);
+    assert_eq!(parsed.retry_interval_minutes, 1);
 }
 
 #[test]
@@ -223,7 +223,7 @@ async fn test_settings_manager_new() {
     let manager = SettingsManager::new(path).await.expect("Failed to create manager");
 
     // Should have default values
-    assert_eq!(manager.get_retry_interval_minutes().await, 10);
+    assert_eq!(manager.get_retry_interval_minutes().await, 1);
     assert_eq!(manager.get_storage_path().await, "./data");
 }
 
@@ -321,7 +321,7 @@ async fn test_settings_manager_get_all() {
     // Get all settings
     let settings = manager.get_all().await;
 
-    assert_eq!(settings.retry_interval_minutes, 10);
+    assert_eq!(settings.retry_interval_minutes, 1);
     assert_eq!(settings.storage_path, "./data");
     assert_eq!(settings.max_message_retries, 5);
 }

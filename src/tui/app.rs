@@ -237,7 +237,20 @@ impl App {
 
     /// Start transport server in background with automatic retry on failure
     ///
-    /// This starts the HTTP server to receive messages and pings.
+    /// The server starts immediately and runs until app shutdown, independent of connectivity.
+    /// This ensures peers can always send messages to the shared contact endpoint.
+    ///
+    /// # Server Lifecycle
+    /// 1. Binds to preferred port (or tries up to 10 random ports if unavailable)
+    /// 2. Runs health check to verify server is listening
+    /// 3. Updates database with actual running port
+    /// 4. Stays running until app exit (tokio runtime kept alive with oneshot channel)
+    ///
+    /// # Connectivity Independence
+    /// - Server starts BEFORE connectivity detection
+    /// - Connectivity uses the actual running port to create port mappings
+    /// - Server continues running regardless of connectivity success/failure
+    ///
     /// If the preferred port fails, it will try alternative ports automatically.
     /// Handlers are set up to automatically create chats when pings are received.
     pub fn start_transport(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -256,8 +269,11 @@ impl App {
         *status.lock().unwrap() = TransportServerStatus::Starting;
 
         // Setup ping handler and message handler to receive messages and pings
+        // Use a channel to keep the runtime alive until app exits
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+
             rt.block_on(async move {
                 // Set local UID
                 transport.set_local_uid(uid).await;
@@ -406,6 +422,11 @@ impl App {
                     let final_error = format!("Failed to start transport server after {} attempts. Last error: {}", max_retries, last_error);
                     tracing::error!("{}", final_error);
                     *status.lock().unwrap() = TransportServerStatus::Failed(final_error);
+                } else {
+                    // Keep runtime alive by waiting on channel (which never receives)
+                    // This ensures the spawned server task continues running
+                    tracing::info!("Transport server is running, keeping runtime alive");
+                    let _ = rx.await;
                 }
             });
         });
@@ -925,19 +946,14 @@ impl App {
                         Ok(ping_response) => {
                             tracing::info!("Successfully pinged newly imported contact {} (response: {})", contact_for_ping.uid, ping_response.status);
                             // Ping succeeded - mark chat as active and clear pending status
-                            if let Ok(queue) = crate::queue::MessageQueue::new_with_path("./app_data/message_queue.db") {
-                                if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
-                                    // Mark chat as active (connection confirmed)
-                                    if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
-                                        chat.mark_unread(); // Mark as active
-                                        tracing::info!("Marked chat with {} as active after successful ping", contact_for_ping.uid);
-                                    }
-
-                                    // Clear pending status from queue
-                                    let pending_uids = queue.get_pending_contact_uids().unwrap_or_default();
-                                    app_state.sync_pending_status(&pending_uids);
-                                    let _ = app_state.save_to_db(&storage_clone);
+                            if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
+                                // Mark chat as active (connection confirmed) and clear pending flag
+                                if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
+                                    chat.mark_unread(); // Mark as active
+                                    chat.mark_no_pending(); // Clear pending flag since ping succeeded
+                                    tracing::info!("Marked chat with {} as active after successful ping", contact_for_ping.uid);
                                 }
+                                let _ = app_state.save_to_db(&storage_clone);
                             }
                         }
                         Err(e) => {
@@ -1227,11 +1243,12 @@ impl App {
                                             succeeded += 1;
                                             tracing::info!("Retry worker: {} delivered successfully to {}", message_type, target_uid);
 
-                                            // If this was a successful ping, mark chat as active
+                                            // If this was a successful ping, mark chat as active and clear pending
                                             if message_type == "ping" && ping_response_opt.is_some() {
                                                 if let Ok(mut app_state) = AppState::load_from_db(&storage) {
                                                     if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == target_uid) {
                                                         chat.mark_unread(); // Mark as active
+                                                        chat.mark_no_pending(); // Clear pending flag since ping succeeded
                                                         tracing::info!("Retry worker: Marked chat with {} as active after successful ping", target_uid);
                                                         let _ = app_state.save_to_db(&storage);
                                                     }
