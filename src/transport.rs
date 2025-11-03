@@ -353,6 +353,7 @@ impl Transport {
         // Send the request
         match self.client.request(req).await {
             Ok(response) => {
+                let status_code = response.status().as_u16() as i32;
                 if response.status().is_success() {
                     // Read the response body
                     let body = response.collect().await
@@ -364,18 +365,56 @@ impl Transport {
                         .map_err(|e| Error::CborSerialization(format!("Failed to deserialize ping response: {}", e)))?;
 
                     info!("Ping successful: {} - {}", ping_response.uid, ping_response.status);
+
+                    // Log successful request
+                    Self::log_request_to_db(
+                        "outgoing",
+                        "ping",
+                        Some(&contact.uid),
+                        Some(&contact.ip),
+                        Some(status_code),
+                        true,
+                        None,
+                        Some(&ping_response.status),
+                    );
+
                     Ok(ping_response)
                 } else {
-                    warn!("Ping failed with status {}: {}", response.status(), contact.ip);
-                    Err(Error::Transport(format!(
-                        "Ping failed with status {}",
-                        response.status()
-                    )))
+                    let error_msg = format!("Ping failed with status {}", response.status());
+                    warn!("{}: {}", error_msg, contact.ip);
+
+                    // Log failed request
+                    Self::log_request_to_db(
+                        "outgoing",
+                        "ping",
+                        Some(&contact.uid),
+                        Some(&contact.ip),
+                        Some(status_code),
+                        false,
+                        Some(&error_msg),
+                        None,
+                    );
+
+                    Err(Error::Transport(error_msg))
                 }
             }
             Err(e) => {
+                let error_msg = format!("Ping send failed: {}", e);
                 error!("Failed to send ping to {}: {}", contact.ip, e);
-                Err(Error::Transport(format!("Ping send failed: {}", e)))
+
+                // Log failed request
+                Self::log_request_to_db(
+                    "outgoing",
+                    "ping",
+                    Some(&contact.uid),
+                    Some(&contact.ip),
+                    None,
+                    false,
+                    Some(&error_msg),
+                    None,
+                );
+
+                Err(Error::Transport(error_msg))
             }
         }
     }
@@ -446,20 +485,59 @@ impl Transport {
         // Send the request
         match self.client.request(req).await {
             Ok(response) => {
+                let status_code = response.status().as_u16() as i32;
                 if response.status().is_success() {
                     info!("Message sent successfully to {}", contact.ip);
+
+                    // Log successful request
+                    Self::log_request_to_db(
+                        "outgoing",
+                        message_type,
+                        Some(&contact.uid),
+                        Some(&contact.ip),
+                        Some(status_code),
+                        true,
+                        None,
+                        Some("Message delivered"),
+                    );
+
                     Ok(())
                 } else {
-                    warn!("Message send failed with status {}: {}", response.status(), contact.ip);
-                    Err(Error::Transport(format!(
-                        "Message send failed with status {}",
-                        response.status()
-                    )))
+                    let error_msg = format!("Message send failed with status {}", response.status());
+                    warn!("{}: {}", error_msg, contact.ip);
+
+                    // Log failed request
+                    Self::log_request_to_db(
+                        "outgoing",
+                        message_type,
+                        Some(&contact.uid),
+                        Some(&contact.ip),
+                        Some(status_code),
+                        false,
+                        Some(&error_msg),
+                        None,
+                    );
+
+                    Err(Error::Transport(error_msg))
                 }
             }
             Err(e) => {
+                let error_msg = format!("Message send failed: {}", e);
                 error!("Failed to send message to {}: {}", contact.ip, e);
-                Err(Error::Transport(format!("Message send failed: {}", e)))
+
+                // Log failed request
+                Self::log_request_to_db(
+                    "outgoing",
+                    message_type,
+                    Some(&contact.uid),
+                    Some(&contact.ip),
+                    None,
+                    false,
+                    Some(&error_msg),
+                    None,
+                );
+
+                Err(Error::Transport(error_msg))
             }
         }
     }
@@ -474,6 +552,42 @@ impl Transport {
     pub fn local_addr(&self) -> Option<SocketAddr> {
         self.local_addr
     }
+
+    /// Helper method to log requests to database
+    /// This is a best-effort operation - errors are logged but don't affect the request
+    fn log_request_to_db(
+        direction: &str,
+        request_type: &str,
+        target_uid: Option<&str>,
+        target_ip: Option<&str>,
+        status_code: Option<i32>,
+        success: bool,
+        error_message: Option<&str>,
+        response_data: Option<&str>,
+    ) {
+        // Create storage connection (file-based production DB)
+        let storage = match crate::storage::Storage::new_with_default_path() {
+            Ok(s) => s,
+            Err(e) => {
+                debug!("Failed to create storage for request logging: {}", e);
+                return;
+            }
+        };
+
+        // Log the request
+        if let Err(e) = storage.log_request(
+            direction,
+            request_type,
+            target_uid,
+            target_ip,
+            status_code,
+            success,
+            error_message,
+            response_data,
+        ) {
+            debug!("Failed to log request to database: {}", e);
+        }
+    }
 }
 
 impl Default for Transport {
@@ -482,14 +596,53 @@ impl Default for Transport {
     }
 }
 
+/// Helper function to log incoming requests to database
+fn log_incoming_request(
+    request_type: &str,
+    sender_uid: Option<&str>,
+    sender_ip: Option<&str>,
+    status_code: i32,
+    success: bool,
+    error_message: Option<&str>,
+) {
+    // Create storage connection (file-based production DB)
+    let storage = match crate::storage::Storage::new_with_default_path() {
+        Ok(s) => s,
+        Err(e) => {
+            debug!("Failed to create storage for request logging: {}", e);
+            return;
+        }
+    };
+
+    // Log the request
+    if let Err(e) = storage.log_request(
+        "incoming",
+        request_type,
+        sender_uid,
+        sender_ip,
+        Some(status_code),
+        success,
+        error_message,
+        None,
+    ) {
+        debug!("Failed to log incoming request to database: {}", e);
+    }
+}
+
 /// Handle incoming HTTP requests
-async fn handle_request(
+pub(crate) async fn handle_request(
     req: Request<Incoming>,
     message_handler: Arc<Mutex<Option<MessageHandler>>>,
     new_message_handler: Arc<Mutex<Option<NewMessageHandler>>>,
     ping_handler: Arc<Mutex<Option<PingHandler>>>,
     local_uid: Arc<Mutex<Option<String>>>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
+    // Extract peer address from request headers if available
+    let peer_addr = req.headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/output") => {
             debug!("Received POST /output request");
@@ -541,6 +694,11 @@ async fn handle_request(
                 Ok(ping_req) => {
                     info!("Received ping with contact token");
 
+                    // Parse the contact token to get sender UID (for logging)
+                    let sender_uid = crate::storage::parse_contact_token(&ping_req.contact_token)
+                        .ok()
+                        .map(|contact| contact.uid);
+
                     // Call the ping handler if set (to auto-import sender and create chat)
                     let handler_guard = ping_handler.lock().await;
                     if let Some(handler) = handler_guard.as_ref() {
@@ -565,6 +723,17 @@ async fn handle_request(
                     match serde_cbor::to_vec(&response) {
                         Ok(cbor_data) => {
                             info!("Responding to ping");
+
+                            // Log successful incoming ping
+                            log_incoming_request(
+                                "ping",
+                                sender_uid.as_deref(),
+                                peer_addr.as_deref(),
+                                200,
+                                true,
+                                None,
+                            );
+
                             Ok(Response::builder()
                                 .status(StatusCode::OK)
                                 .header("Content-Type", "application/cbor")
@@ -572,25 +741,43 @@ async fn handle_request(
                                 .unwrap())
                         }
                         Err(e) => {
-                            error!("Failed to serialize ping response: {}", e);
+                            let error_msg = format!("Failed to serialize response: {}", e);
+                            error!("{}", error_msg);
+
+                            // Log failed ping response
+                            log_incoming_request(
+                                "ping",
+                                sender_uid.as_deref(),
+                                peer_addr.as_deref(),
+                                500,
+                                false,
+                                Some(&error_msg),
+                            );
+
                             Ok(Response::builder()
                                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Full::new(Bytes::from(format!(
-                                    "Failed to serialize response: {}",
-                                    e
-                                ))))
+                                .body(Full::new(Bytes::from(error_msg)))
                                 .unwrap())
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to deserialize ping request: {}", e);
+                    let error_msg = format!("Invalid ping format: {}", e);
+                    error!("{}", error_msg);
+
+                    // Log failed ping (invalid format)
+                    log_incoming_request(
+                        "ping",
+                        None,
+                        peer_addr.as_deref(),
+                        400,
+                        false,
+                        Some(&error_msg),
+                    );
+
                     Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(Full::new(Bytes::from(format!(
-                            "Invalid ping format: {}",
-                            e
-                        ))))
+                        .body(Full::new(Bytes::from(error_msg)))
                         .unwrap())
                 }
             }
@@ -633,6 +820,16 @@ async fn handle_request(
                         .unwrap())
                 }
             }
+        }
+        (&Method::GET, "/health") => {
+            debug!("Received GET /health request");
+
+            // Simple health check endpoint for external connectivity verification
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/plain")
+                .body(Full::new(Bytes::from("ok")))
+                .unwrap())
         }
         _ => {
             debug!("Received unsupported request: {} {}", req.method(), req.uri().path());

@@ -4,10 +4,10 @@ use crate::tui::screens::SettingsScreen;
 
 #[test]
 fn test_settings_screen_creation() {
-    let screen = SettingsScreen::new(10); // Default is 10 minutes
+    let screen = SettingsScreen::new(1); // Default is 1 minute
 
     // Should initialize with provided retry interval
-    assert_eq!(screen.retry_interval_input, "10");
+    assert_eq!(screen.retry_interval_input, "1");
     assert_eq!(screen.selected_field, 0);
     assert!(screen.status_message.is_some());
     assert!(!screen.is_error);

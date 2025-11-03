@@ -264,6 +264,7 @@ fn test_diagnostics_screen_http_fallback_success() {
     result.pcp = StrategyAttempt::Failed("No gateway".to_string());
     result.natpmp = StrategyAttempt::Failed("No gateway".to_string());
     result.upnp = StrategyAttempt::Failed("No devices found".to_string());
+    result.http = StrategyAttempt::Success(mapping.clone());
     result.mapping = Some(mapping.clone());
 
     screen.update_from_connectivity_result(&result);
@@ -293,6 +294,7 @@ fn test_diagnostics_screen_http_fallback_failure() {
     result.pcp = StrategyAttempt::Failed("No gateway".to_string());
     result.natpmp = StrategyAttempt::Failed("No gateway".to_string());
     result.upnp = StrategyAttempt::Failed("No devices found".to_string());
+    result.http = StrategyAttempt::Failed("All services timed out".to_string());
     result.mapping = None; // No mapping at all
 
     screen.update_from_connectivity_result(&result);
@@ -301,7 +303,7 @@ fn test_diagnostics_screen_http_fallback_failure() {
     assert!(screen.http_fallback_status.is_some(), "HTTP fallback status should be set");
 
     if let Some(Err(error)) = &screen.http_fallback_status {
-        assert!(error.contains("No external IP detected"));
+        assert!(error.contains("All services timed out"));
     } else {
         panic!("Expected HTTP fallback error status");
     }
@@ -359,4 +361,51 @@ fn test_diagnostics_screen_set_http_fallback_status() {
     assert!(screen.http_fallback_status.is_some());
     assert!(screen.http_fallback_status.as_ref().unwrap().is_ok());
     assert!(!screen.is_refreshing, "Should stop refreshing after HTTP fallback");
+}
+
+#[test]
+fn test_diagnostics_screen_http_fallback_from_connectivity_result() {
+    let mut screen = DiagnosticsScreen::new(8080);
+
+    // Create a connectivity result where all NAT methods failed but HTTP succeeded
+    let http_mapping = PortMappingResult {
+        external_ip: IpAddr::V4(Ipv4Addr::new(187, 33, 153, 17)),
+        external_port: 64275,
+        lifetime_secs: 0, // HTTP fallback has no NAT mapping lifetime
+        protocol: MappingProtocol::Direct,
+        created_at_ms: Utc::now().timestamp_millis(),
+    };
+
+    let mut result = ConnectivityResult::new();
+    result.pcp = StrategyAttempt::Failed("Mapping request timed out".to_string());
+    result.natpmp = StrategyAttempt::Failed("Mapping request timed out".to_string());
+    result.upnp = StrategyAttempt::Failed("No gateway found".to_string());
+    result.http = StrategyAttempt::Success(http_mapping.clone());
+    result.mapping = Some(http_mapping.clone());
+    result.cgnat_detected = false;
+
+    screen.update_from_connectivity_result(&result);
+
+    // Verify all NAT methods show as failed
+    assert!(screen.pcp_status.is_some());
+    assert!(screen.pcp_status.as_ref().unwrap().is_err());
+    assert!(screen.natpmp_status.is_some());
+    assert!(screen.natpmp_status.as_ref().unwrap().is_err());
+    assert!(screen.upnp_status.is_some());
+    assert!(screen.upnp_status.as_ref().unwrap().is_err());
+
+    // Verify HTTP fallback succeeded
+    assert!(screen.http_fallback_status.is_some());
+    assert!(screen.http_fallback_status.as_ref().unwrap().is_ok());
+
+    // Verify external endpoint was set from HTTP fallback
+    assert_eq!(
+        screen.external_endpoint,
+        Some("187.33.153.17:64275".to_string())
+    );
+    assert_eq!(screen.ipv4_address, Some("187.33.153.17".to_string()));
+
+    // Verify CGNAT not detected
+    assert!(!screen.cgnat_detected);
+    assert!(!screen.is_refreshing);
 }

@@ -17,7 +17,13 @@ pub fn render_main_menu(f: &mut Frame, app: &App) {
     // Create main layout - adjust based on whether we need to show connectivity warning/error
     let show_warning = app.connectivity_result.is_none();
     let show_error = app.connectivity_result.as_ref().map_or(false, |result| !result.is_success());
-    let show_notification = show_warning || show_error;
+
+    // Check transport server status
+    let transport_status = app.transport_server_status.lock().unwrap().clone();
+    let show_transport_error = matches!(transport_status, crate::tui::app::TransportServerStatus::Failed(_));
+    let show_transport_starting = matches!(transport_status, crate::tui::app::TransportServerStatus::Starting);
+
+    let show_notification = show_warning || show_error || show_transport_error || show_transport_starting;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -60,9 +66,34 @@ pub fn render_main_menu(f: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::ALL).title("Identity"));
     f.render_widget(ip_widget, chunks[1]);
 
-    // Connectivity warning/error (shown while diagnostics are running or if all failed)
+    // Connectivity and transport server warnings/errors
     let menu_chunk_index = if show_notification {
-        if show_warning {
+        if show_transport_error {
+            // Critical error: Transport server failed to start
+            if let crate::tui::app::TransportServerStatus::Failed(ref error_msg) = transport_status {
+                let error_text = Line::from(vec![
+                    Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    Span::styled("Transport server failed: ", Style::default().fg(Color::Red)),
+                    Span::styled(error_msg, Style::default().fg(Color::DarkGray)),
+                ]);
+                let error_widget = Paragraph::new(error_text)
+                    .style(Style::default().fg(Color::Red))
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Red)).title("Critical Error"));
+                f.render_widget(error_widget, chunks[2]);
+            }
+        } else if show_transport_starting {
+            // Info: Transport server is starting
+            let info_text = Line::from(vec![
+                Span::styled("⏳ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("Starting transport server... ", Style::default().fg(Color::Cyan)),
+            ]);
+            let info_widget = Paragraph::new(info_text)
+                .style(Style::default().fg(Color::Cyan))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
+            f.render_widget(info_widget, chunks[2]);
+        } else if show_warning {
             // Warning while connectivity is being configured
             let warning_text = Line::from(vec![
                 Span::styled("⚠ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),

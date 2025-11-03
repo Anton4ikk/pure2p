@@ -34,7 +34,7 @@ pub struct Settings {
     pub retry_base_delay_ms: u64,
     /// Enable notifications
     pub enable_notifications: bool,
-    /// Global retry interval in milliseconds (default 10 minutes)
+    /// Global retry interval in milliseconds (default 1 minute)
     pub global_retry_interval_ms: u64,
     /// Retry interval in minutes (user-facing, converts to/from global_retry_interval_ms)
     pub retry_interval_minutes: u32,
@@ -145,8 +145,8 @@ impl Default for Settings {
             max_message_retries: 5,
             retry_base_delay_ms: 1000,
             enable_notifications: true,
-            global_retry_interval_ms: 600_000, // 10 minutes = 600,000 ms
-            retry_interval_minutes: 10, // 10 minutes
+            global_retry_interval_ms: 60_000, // 1 minute = 60,000 ms
+            retry_interval_minutes: 1, // 1 minute
             storage_path: "./data".to_string(), // Default storage path
         }
     }

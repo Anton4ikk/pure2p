@@ -1,6 +1,7 @@
 //! Connectivity orchestrator - unified strategy selection
 
 use super::cgnat::detect_cgnat;
+use super::health_check::{verify_external_reachability, ReachabilityStatus};
 use super::http_ip::detect_external_ip;
 use super::ipv6::check_ipv6_connectivity;
 use super::natpmp::try_natpmp_mapping;
@@ -10,6 +11,47 @@ use super::types::{ConnectivityResult, MappingProtocol, PortMappingResult, Strat
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
+/// Verify connectivity after transport server is running
+///
+/// This function should be called AFTER the transport server has started listening.
+/// It tests external reachability and updates the ConnectivityResult.
+///
+/// # Arguments
+/// * `result` - The connectivity result to update with reachability status
+///
+/// # Returns
+/// * Updated `ConnectivityResult` with externally_reachable field set
+pub async fn verify_connectivity_health(mut result: ConnectivityResult) -> ConnectivityResult {
+    if let Some(mapping) = &result.mapping {
+        info!("Verifying external reachability of {}:{}", mapping.external_ip, mapping.external_port);
+
+        match verify_external_reachability(mapping, 5).await {
+            ReachabilityStatus::Reachable => {
+                info!("✓ Port is confirmed reachable from external networks");
+                result.externally_reachable = Some(true);
+            }
+            ReachabilityStatus::Unreachable => {
+                warn!("✗ Port is NOT reachable from external networks");
+                warn!("   Possible causes:");
+                warn!("   - Firewall blocking the port");
+                warn!("   - Port mapping failed silently");
+                warn!("   - Router behind CGNAT (external IP in 100.64.0.0/10 range)");
+                warn!("   - Testing from behind the same NAT");
+                result.externally_reachable = Some(false);
+            }
+            ReachabilityStatus::TestFailed(e) => {
+                warn!("⚠ Health check inconclusive: {}", e);
+                result.externally_reachable = None;
+            }
+        }
+    } else {
+        warn!("No mapping available to verify");
+        result.externally_reachable = Some(false);
+    }
+
+    result
+}
+
 /// Establish connectivity using automatic protocol detection and fallback
 ///
 /// This function tries different connectivity strategies in order:
@@ -18,6 +60,10 @@ use tracing::{debug, error, info, warn};
 /// 3. NAT-PMP (legacy Apple/Cisco protocol)
 /// 4. UPnP IGD (universal but slower)
 /// 5. HTTP-based IP detection (fallback when all NAT traversal fails)
+///
+/// After a successful mapping, this function verifies external reachability
+/// by testing the /health endpoint. If verification fails, it continues to
+/// the next strategy to find a working solution.
 ///
 /// Returns a comprehensive result showing all attempts and the final mapping.
 ///
@@ -38,8 +84,12 @@ use tracing::{debug, error, info, warn};
 /// let result = establish_connectivity(8080).await;
 ///
 /// if let Some(mapping) = result.mapping {
-///     println!("Success! External address: {}:{}",
-///              mapping.external_ip, mapping.external_port);
+///     if result.externally_reachable == Some(true) {
+///         println!("✓ Success! Confirmed reachable at {}:{}",
+///                  mapping.external_ip, mapping.external_port);
+///     } else {
+///         println!("⚠ Mapping created but reachability unconfirmed");
+///     }
 /// } else {
 ///     println!("All methods failed: {}", result.summary());
 /// }
@@ -140,6 +190,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
             };
 
             result.cgnat_detected = detect_cgnat(external_ip);
+            result.http = StrategyAttempt::Success(mapping.clone());
             result.mapping = Some(mapping);
 
             info!("Connectivity established via HTTP IP detection (direct mode, no NAT mapping)");
@@ -147,6 +198,7 @@ pub async fn establish_connectivity(port: u16) -> ConnectivityResult {
         }
         Err(e) => {
             error!("HTTP IP detection failed: {}", e);
+            result.http = StrategyAttempt::Failed(e.to_string());
         }
     }
 

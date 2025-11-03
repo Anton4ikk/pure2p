@@ -56,6 +56,21 @@ pub struct App {
     retry_worker_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Background retry worker thread handle
     retry_worker_handle: Option<std::thread::JoinHandle<()>>,
+    /// Transport server status
+    pub transport_server_status: std::sync::Arc<std::sync::Mutex<TransportServerStatus>>,
+}
+
+/// Status of the transport server
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransportServerStatus {
+    /// Not started yet
+    NotStarted,
+    /// Currently attempting to start
+    Starting,
+    /// Running successfully on specified port
+    Running(u16),
+    /// Failed to start with error message
+    Failed(String),
 }
 
 impl App {
@@ -157,6 +172,7 @@ impl App {
             storage,
             retry_worker_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             retry_worker_handle: None,
+            transport_server_status: std::sync::Arc::new(std::sync::Mutex::new(TransportServerStatus::NotStarted)),
         };
 
         // Save initial state on first run
@@ -219,23 +235,45 @@ impl App {
         Ok(())
     }
 
-    /// Start transport server in background
+    /// Start transport server in background with automatic retry on failure
     ///
-    /// This starts the HTTP server to receive messages and pings.
+    /// The server starts immediately and runs until app shutdown, independent of connectivity.
+    /// This ensures peers can always send messages to the shared contact endpoint.
+    ///
+    /// # Server Lifecycle
+    /// 1. Binds to preferred port (or tries up to 10 random ports if unavailable)
+    /// 2. Runs health check to verify server is listening
+    /// 3. Updates database with actual running port
+    /// 4. Stays running until app exit (tokio runtime kept alive with oneshot channel)
+    ///
+    /// # Connectivity Independence
+    /// - Server starts BEFORE connectivity detection
+    /// - Connectivity uses the actual running port to create port mappings
+    /// - Server continues running regardless of connectivity success/failure
+    ///
+    /// If the preferred port fails, it will try alternative ports automatically.
     /// Handlers are set up to automatically create chats when pings are received.
     pub fn start_transport(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Set local UID for transport
         let uid = self.keypair.uid.to_string();
         let transport = self.transport.clone();
-        let local_port = self.local_port;
+        let preferred_port = self.local_port;
         let state_path = self.state_path.clone();
+        let status = self.transport_server_status.clone();
+        let storage = self.storage.clone();
 
         // Create storage instances for handlers (they need their own connections in separate threads)
         let use_in_memory = state_path.contains("test") || state_path.contains("tmp");
 
+        // Mark as starting
+        *status.lock().unwrap() = TransportServerStatus::Starting;
+
         // Setup ping handler and message handler to receive messages and pings
+        // Use a channel to keep the runtime alive until app exits
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+
             rt.block_on(async move {
                 // Set local UID
                 transport.set_local_uid(uid).await;
@@ -315,10 +353,80 @@ impl App {
                     }
                 }).await;
 
-                // Start server
-                let addr = format!("0.0.0.0:{}", local_port).parse().expect("Invalid address");
-                if let Err(e) = transport.clone().start(addr).await {
-                    tracing::error!("Transport server failed: {}", e);
+                // Try to start server with automatic port retry
+                let mut current_port = preferred_port;
+                let max_retries = 10;
+                let mut last_error = String::new();
+                let mut bind_successful = false;
+
+                for attempt in 0..max_retries {
+                    let addr = format!("0.0.0.0:{}", current_port).parse().expect("Invalid address");
+
+                    tracing::info!("Attempting to start transport server on port {} (attempt {}/{})", current_port, attempt + 1, max_retries);
+
+                    match transport.clone().start(addr).await {
+                        Ok(_) => {
+                            tracing::info!("✓ Transport server successfully started on port {}", current_port);
+
+                            // Wait a moment for server to fully initialize
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                            // Verify server is actually listening by testing locally
+                            let test_url = format!("http://127.0.0.1:{}/health", current_port);
+                            match reqwest::Client::new()
+                                .get(&test_url)
+                                .timeout(std::time::Duration::from_secs(2))
+                                .send()
+                                .await
+                            {
+                                Ok(response) if response.status().is_success() => {
+                                    tracing::info!("✓ Transport server verified listening on port {}", current_port);
+                                    *status.lock().unwrap() = TransportServerStatus::Running(current_port);
+                                    bind_successful = true;
+
+                                    // Always update database and app state with actual running port
+                                    if let Ok(mut app_state) = AppState::load_from_db(&storage) {
+                                        app_state.user_port = current_port;
+                                        let _ = app_state.save_to_db(&storage);
+                                        tracing::info!("Updated database with running port: {}", current_port);
+                                    }
+                                    break;
+                                }
+                                Ok(response) => {
+                                    last_error = format!("Server started but health check returned: {}", response.status());
+                                    tracing::warn!("{}", last_error);
+                                }
+                                Err(e) => {
+                                    last_error = format!("Server started but health check failed: {}", e);
+                                    tracing::warn!("{}", last_error);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            last_error = format!("Port {} bind failed: {}", current_port, e);
+                            tracing::warn!("{}", last_error);
+
+                            // Try a different random port
+                            current_port = AppState::generate_random_port();
+                            tracing::info!("Will retry with port {}", current_port);
+                        }
+                    }
+
+                    // Small delay between retries
+                    if attempt < max_retries - 1 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+
+                if !bind_successful {
+                    let final_error = format!("Failed to start transport server after {} attempts. Last error: {}", max_retries, last_error);
+                    tracing::error!("{}", final_error);
+                    *status.lock().unwrap() = TransportServerStatus::Failed(final_error);
+                } else {
+                    // Keep runtime alive by waiting on channel (which never receives)
+                    // This ensures the spawned server task continues running
+                    tracing::info!("Transport server is running, keeping runtime alive");
+                    let _ = rx.await;
                 }
             });
         });
@@ -326,19 +434,52 @@ impl App {
         Ok(())
     }
 
+    /// Get the actual running port from transport server (or configured port if not running yet)
+    pub fn get_actual_port(&self) -> u16 {
+        if let Ok(status) = self.transport_server_status.lock() {
+            if let TransportServerStatus::Running(port) = *status {
+                return port;
+            }
+        }
+        self.local_port
+    }
+
     /// Trigger startup connectivity diagnostics (non-blocking)
     ///
     /// Should be called after App::new() to detect external IP for contact sharing.
+    /// Waits for transport server to be running before starting connectivity check.
     pub fn trigger_startup_connectivity(&mut self) {
         // Don't start if already running
         if self.diagnostics_refresh_handle.is_some() {
             return;
         }
 
+        // Wait for transport server to be running before checking connectivity
+        let status = self.transport_server_status.clone();
         let port = self.local_port;
 
         // Spawn background thread with tokio runtime
         let handle = std::thread::spawn(move || {
+            // Wait up to 30 seconds for transport server to start
+            for _ in 0..60 {
+                if let Ok(current_status) = status.lock() {
+                    if let TransportServerStatus::Running(actual_port) = *current_status {
+                        // Server is running, use the actual port
+                        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                        return rt.block_on(async move {
+                            crate::connectivity::establish_connectivity(actual_port).await
+                        });
+                    } else if matches!(*current_status, TransportServerStatus::Failed(_)) {
+                        // Server failed, return empty result
+                        tracing::error!("Transport server failed to start, skipping connectivity check");
+                        return crate::connectivity::ConnectivityResult::new();
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+
+            // Timeout waiting for server, use configured port anyway
+            tracing::warn!("Timeout waiting for transport server, using configured port {}", port);
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             rt.block_on(async move {
                 crate::connectivity::establish_connectivity(port).await
@@ -372,6 +513,29 @@ impl App {
                             self.app_state.user_ip = Some(detected_ip);
                             self.app_state.user_port = mapping.external_port;
                             let _ = self.save_state();
+
+                            // Run health check AFTER transport server has started (give it 1 second)
+                            // This verifies that our port is actually reachable from external networks
+                            tracing::info!("Scheduling external reachability health check...");
+                            let result_for_health = result.clone();
+                            std::thread::spawn(move || {
+                                // Wait for transport server to fully start
+                                std::thread::sleep(std::time::Duration::from_secs(2));
+
+                                let runtime = tokio::runtime::Runtime::new().unwrap();
+                                let verified_result = runtime.block_on(async {
+                                    crate::connectivity::verify_connectivity_health(result_for_health).await
+                                });
+
+                                if verified_result.externally_reachable == Some(true) {
+                                    tracing::info!("✓ External reachability confirmed - you can receive messages!");
+                                } else if verified_result.externally_reachable == Some(false) {
+                                    tracing::warn!("✗ Port is NOT reachable from external networks");
+                                    tracing::warn!("   You may need to manually configure port forwarding on your router");
+                                } else {
+                                    tracing::warn!("⚠ Health check inconclusive");
+                                }
+                            });
                         }
                         self.connectivity_result = Some(result.clone());
 
@@ -739,8 +903,10 @@ impl App {
             // Add contact to list
             self.app_state.contacts.push(contact.clone());
 
-            // Create a new chat for this contact
-            let new_chat = crate::storage::Chat::new(contact_uid);
+            // Create a new chat for this contact with pending status
+            // (will be updated to active if ping succeeds)
+            let mut new_chat = crate::storage::Chat::new(contact_uid.clone());
+            new_chat.mark_has_pending(); // Mark as pending until ping succeeds
             self.app_state.chats.push(new_chat);
 
             // Auto-save after importing contact and creating chat
@@ -780,19 +946,14 @@ impl App {
                         Ok(ping_response) => {
                             tracing::info!("Successfully pinged newly imported contact {} (response: {})", contact_for_ping.uid, ping_response.status);
                             // Ping succeeded - mark chat as active and clear pending status
-                            if let Ok(queue) = crate::queue::MessageQueue::new_with_path("./app_data/message_queue.db") {
-                                if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
-                                    // Mark chat as active (connection confirmed)
-                                    if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
-                                        chat.mark_unread(); // Mark as active
-                                        tracing::info!("Marked chat with {} as active after successful ping", contact_for_ping.uid);
-                                    }
-
-                                    // Clear pending status from queue
-                                    let pending_uids = queue.get_pending_contact_uids().unwrap_or_default();
-                                    app_state.sync_pending_status(&pending_uids);
-                                    let _ = app_state.save_to_db(&storage_clone);
+                            if let Ok(mut app_state) = AppState::load_from_db(&storage_clone) {
+                                // Mark chat as active (connection confirmed) and clear pending flag
+                                if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == contact_for_ping.uid) {
+                                    chat.mark_unread(); // Mark as active
+                                    chat.mark_no_pending(); // Clear pending flag since ping succeeded
+                                    tracing::info!("Marked chat with {} as active after successful ping", contact_for_ping.uid);
                                 }
+                                let _ = app_state.save_to_db(&storage_clone);
                             }
                         }
                         Err(e) => {
@@ -1082,11 +1243,12 @@ impl App {
                                             succeeded += 1;
                                             tracing::info!("Retry worker: {} delivered successfully to {}", message_type, target_uid);
 
-                                            // If this was a successful ping, mark chat as active
+                                            // If this was a successful ping, mark chat as active and clear pending
                                             if message_type == "ping" && ping_response_opt.is_some() {
                                                 if let Ok(mut app_state) = AppState::load_from_db(&storage) {
                                                     if let Some(chat) = app_state.chats.iter_mut().find(|c| c.contact_uid == target_uid) {
                                                         chat.mark_unread(); // Mark as active
+                                                        chat.mark_no_pending(); // Clear pending flag since ping succeeded
                                                         tracing::info!("Retry worker: Marked chat with {} as active after successful ping", target_uid);
                                                         let _ = app_state.save_to_db(&storage);
                                                     }

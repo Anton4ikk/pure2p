@@ -60,7 +60,7 @@ src/
 │   └── storage_db.rs   # SQLite storage backend (schema + CRUD)
 ├── connectivity/       # NAT traversal (modular)
 │   ├── mod.rs          # Public API, re-exports
-│   ├── types.rs        # Common types (PortMappingResult, MappingProtocol, MappingError, etc.)
+│   ├── types.rs        # Common types (PortMappingResult, MappingProtocol, MappingError, ConnectivityResult with externally_reachable)
 │   ├── gateway.rs      # Cross-platform gateway discovery
 │   ├── pcp.rs          # PCP (Port Control Protocol, RFC 6887)
 │   ├── natpmp.rs       # NAT-PMP (RFC 6886)
@@ -68,13 +68,14 @@ src/
 │   ├── ipv6.rs         # IPv6 direct connectivity detection
 │   ├── http_ip.rs      # HTTP-based external IP detection (fallback)
 │   ├── cgnat.rs        # CGNAT detection (RFC 6598, 100.64.0.0/10)
-│   ├── orchestrator.rs # establish_connectivity() - IPv6→PCP→NAT-PMP→UPnP→HTTP
+│   ├── health_check.rs # External reachability verification (verify_external_reachability, ReachabilityStatus)
+│   ├── orchestrator.rs # establish_connectivity(), verify_connectivity_health() - IPv6→PCP→NAT-PMP→UPnP→HTTP + health check
 │   └── manager.rs      # PortMappingManager, UpnpMappingManager
 ├── tui/                # TUI module (library)
 │   ├── mod.rs          # Module exports
 │   ├── types.rs        # Screen, MenuItem enums
 │   ├── screens.rs      # Screen state structs
-│   ├── app.rs          # App business logic with automatic background connectivity and retry worker
+│   ├── app.rs          # App business logic with transport server (persistent runtime), background connectivity, and retry worker
 │   ├── clipboard.rs    # Clipboard abstraction (ClipboardProvider trait, RealClipboard, MockClipboard)
 │   └── ui/             # Modular rendering (8 files - StartupSync screen removed)
 │       ├── mod.rs      # Main ui() dispatcher
@@ -86,22 +87,23 @@ src/
 │       ├── settings.rs
 │       ├── diagnostics.rs
 │       └── helpers.rs
-├── tests/              # Unit tests (395 tests)
+├── tests/              # Unit tests (409 tests)
 │   ├── mod.rs
 │   ├── crypto_tests.rs
 │   ├── protocol_tests.rs
-│   ├── transport_tests.rs
+│   ├── transport_tests.rs     # Includes /health endpoint tests + request logging tests
 │   ├── queue_tests.rs
 │   ├── messaging_tests.rs
-│   ├── connectivity_tests.rs  # Includes CGNAT detection
+│   ├── connectivity_tests.rs  # Includes CGNAT detection + health check verification
 │   ├── lib_tests.rs
-│   ├── storage_tests/  # Storage module tests (66 tests)
+│   ├── storage_tests/  # Storage module tests (83 tests)
 │   │   ├── mod.rs
 │   │   ├── contact_tests.rs
 │   │   ├── token_tests.rs
 │   │   ├── chat_tests.rs
 │   │   ├── app_state_tests.rs
-│   │   └── settings_tests.rs
+│   │   ├── settings_tests.rs
+│   │   └── request_log_tests.rs  # Request logging for network debugging
 │   └── tui_tests/      # TUI module tests (128 tests)
 │       ├── mod.rs
 │       ├── app_tests/        # Modularized app tests (42 tests)
@@ -125,7 +127,7 @@ src/
 │       ├── types_tests.rs
 │       └── ui_tests.rs
 └── bin/
-    └── tui.rs          # TUI binary (thin wrapper, starts transport server, triggers connectivity, retry worker starts after connectivity)
+    └── tui.rs          # TUI binary (thin wrapper, starts persistent transport server FIRST, then triggers connectivity, retry worker starts after connectivity)
 ```
 
 See [CLAUDE.md](CLAUDE.md#core-modules) for implementation details.
@@ -141,7 +143,7 @@ cargo build --release          # Optimized
 cargo check                    # Fast compile check
 
 # Test
-cargo test                     # All tests (395 total)
+cargo test                     # All tests (409 total)
 
 # Quality
 cargo fmt                      # Format
@@ -185,17 +187,18 @@ git push origin feature/name
 src/tests/
 ├── crypto_tests.rs       (27 tests)  - Keypair, signing, UID, X25519 ECDH, AEAD encryption, token signing
 ├── protocol_tests.rs     (25 tests)  - Envelopes, serialization, E2E encryption
-├── transport_tests.rs    (26 tests)  - HTTP, peers, delivery
+├── transport_tests.rs    (36 tests)  - HTTP (/output, /ping, /message, /health), peers, delivery, health check integration, request logging (ping/message success/failure, incoming)
 ├── queue_tests.rs        (34 tests)  - SQLite queue, retries
 ├── messaging_tests.rs    (17 tests)  - High-level messaging API
-├── connectivity_tests.rs (38 tests)  - PCP, NAT-PMP, UPnP, IPv6, HTTP IP detection, CGNAT detection
+├── connectivity_tests.rs (49 tests)  - PCP, NAT-PMP, UPnP, IPv6, HTTP IP detection, CGNAT detection, health check verification, reachability status
 ├── lib_tests.rs          (1 test)    - Library init
-├── storage_tests/        (66 tests)  - Organized by storage module
+├── storage_tests/        (83 tests)  - Organized by storage module
 │   ├── contact_tests.rs  (11 tests)  - Contact struct, expiry, activation
 │   ├── token_tests.rs    (16 tests)  - Token generation/parsing, signature verification
 │   ├── chat_tests.rs     (9 tests)   - Chat/Message structs, pending flags
 │   ├── app_state_tests.rs (21 tests) - AppState JSON/CBOR + SQLite (save/load, messages, updates, migration)
-│   └── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
+│   ├── settings_tests.rs (16 tests)  - Settings, SettingsManager, concurrency
+│   └── request_log_tests.rs (17 tests) - Request logging (CRUD, filtering by contact, timestamp ordering, cleanup, various status codes)
 └── tui_tests/            (128 tests) - Organized by TUI components
     ├── app_tests/        (42 tests)  - Modularized by feature area
     │   ├── helpers.rs                - Shared test utilities
@@ -262,6 +265,54 @@ cargo install cargo-audit
 cargo audit
 ```
 
+### Network Debugging with Request Logs
+
+All network requests (pings, messages) are automatically logged to `./app_data/pure2p.db` for debugging connectivity issues.
+
+**View all recent requests:**
+```bash
+sqlite3 app_data/pure2p.db "
+SELECT datetime(timestamp/1000, 'unixepoch') as time,
+       direction, request_type, target_uid, success, error_message
+FROM request_logs
+ORDER BY timestamp DESC
+LIMIT 20;"
+```
+
+**Check logs for specific contact:**
+```bash
+sqlite3 app_data/pure2p.db "
+SELECT datetime(timestamp/1000, 'unixepoch') as time,
+       direction, request_type, status_code, success, error_message
+FROM request_logs
+WHERE target_uid='CONTACT_UID_HERE'
+ORDER BY timestamp DESC;"
+```
+
+**See only failed requests:**
+```bash
+sqlite3 app_data/pure2p.db "
+SELECT datetime(timestamp/1000, 'unixepoch') as time,
+       direction, request_type, target_ip, error_message
+FROM request_logs
+WHERE success=0
+ORDER BY timestamp DESC;"
+```
+
+**Common error patterns:**
+- `"Connection refused"` → Peer's server not running or firewall blocking
+- `"Ping failed with status 404"` → Peer server running but /ping endpoint not configured
+- `"Ping send failed: dns error"` → Invalid IP address or DNS resolution failed
+- `"Ping failed with status 500"` → Peer's server encountered an error
+- Timeout errors → Network connectivity issue or peer behind restrictive NAT
+
+**Cleanup old logs** (keep last 7 days):
+```bash
+sqlite3 app_data/pure2p.db "
+DELETE FROM request_logs
+WHERE timestamp < (unixepoch('now') - 7*24*60*60) * 1000;"
+```
+
 ---
 
 ## Troubleshooting
@@ -286,6 +337,22 @@ sudo apt-get install pkg-config libssl-dev
 - Check SQLite locks: `rm -rf target/` and rebuild
 - Use `-- --test-threads=1` to run sequentially
 
+**Main menu shows red "Transport server failed" error:**
+- Transport server failed to bind after 10 retry attempts
+- Possible causes:
+  - All random ports in range 49152-65535 are in use (very rare)
+  - Firewall blocking all incoming connections
+  - Operating system resource limits (too many open files/sockets)
+  - Another instance of the app is already running
+- Solutions:
+  - Check for other pure2p-tui processes: `ps aux | grep pure2p-tui`
+  - Check available ports: `lsof -nP -iTCP -sTCP:LISTEN | wc -l`
+  - Restart the app (will try different ports)
+  - Check system logs for detailed error messages
+  - Temporarily disable firewall to test if it's the cause
+- The app automatically tries 10 different random ports before giving up
+- Each port is verified by testing the `/health` endpoint locally
+
 **Contact token invalid after restart:**
 - App now intelligently reuses the same port when on the same network
 - Port only changes when your external IP changes (different network)
@@ -306,6 +373,37 @@ sudo apt-get install pkg-config libssl-dev
 - Chat will auto-transition to Active when ping finally succeeds
 - Check queue size in diagnostics (press `n`) to see pending messages
 
+**Diagnostics shows "✗ Not reachable" even though UPnP/PCP succeeded:**
+- Port mapping created but port is not externally reachable
+- Possible causes:
+  - Router firewall blocking the port despite successful mapping
+  - Router silently rejected the mapping (reported success but didn't create mapping)
+  - Behind CGNAT (check for 100.64.x.x IP range warning)
+  - ISP blocking incoming connections
+- Solutions:
+  - Check router's port forwarding table (web admin) to verify mapping exists
+  - Try manual port forwarding configuration in router settings
+  - Contact ISP if behind CGNAT (may need VPN or relay server)
+  - Try a different port number
+- Note: If testing from same network, health check may fail even if port is actually reachable externally
+
+**Cannot receive messages from peers on different networks:**
+- Symptom: Peers get "Connection refused" when trying to ping/message you
+- Root cause: Transport server may not be listening (check with `curl http://127.0.0.1:<PORT>/health`)
+- Common causes:
+  - **Tokio runtime dropped**: Server thread exits after setup completes (FIXED in v0.3.0+)
+  - Firewall blocking the port
+  - Wrong IP:port shared in contact token
+- Debug steps:
+  1. Check server is running locally: `curl http://127.0.0.1:<YOUR_PORT>/health`
+  2. Check request logs: `sqlite3 app_data/pure2p.db "SELECT * FROM request_logs ORDER BY timestamp DESC LIMIT 5;"`
+  3. Verify external IP in diagnostics screen (press `n`)
+  4. Test external reachability: Ask peer to `curl http://<YOUR_EXTERNAL_IP>:<PORT>/health`
+- Architecture notes:
+  - Transport server MUST start before connectivity detection
+  - Server MUST stay running independently of connectivity results
+  - Tokio runtime kept alive via oneshot channel that never completes
+
 ---
 
 ## Contributing
@@ -325,12 +423,13 @@ sudo apt-get install pkg-config libssl-dev
 - **Production**: `./app_data/pure2p.db` (all app data) + `./app_data/message_queue.db` (retry queue)
 - **Tests**: In-memory SQLite databases (no filesystem pollution)
 - **Migration**: Legacy `app_state.json` auto-migrated to SQLite on first run (backed up as `.json.bak`)
-- **Data**: User identity (keypair, UID), contacts, chats, messages, settings, network info (IP, port)
+- **Data**: User identity (keypair, UID), contacts, chats, messages, settings, network info (IP, port), request logs (for debugging)
 - **Auto-save**: State saved to SQLite after every modification
 - **Concurrent access**: Transport handlers create separate connections to same database file
 - **State reload**: App reloads from DB when navigating to pick up incoming messages
 - **Port persistence**: Smart port selection reuses saved port when IP unchanged (maintains contact token validity across restarts)
 - **Chat status**: Chats marked as Active only when ping response received (confirms two-way connectivity)
+- **Request logging**: All network requests (outgoing/incoming) logged with timestamps, status codes, and errors for debugging
 - Safe to delete `./app_data/` for full reset (will recreate with defaults)
 
 See [ROADMAP.md](ROADMAP.md#-contributing) for details.

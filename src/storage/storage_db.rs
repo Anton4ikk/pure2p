@@ -11,6 +11,31 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
+/// Request log entry for debugging network issues
+#[derive(Debug, Clone)]
+pub struct RequestLog {
+    /// Unique log entry ID
+    pub id: i64,
+    /// Unix timestamp in milliseconds
+    pub timestamp: i64,
+    /// Direction: "outgoing" or "incoming"
+    pub direction: String,
+    /// Type of request: "ping", "text", "delete", etc.
+    pub request_type: String,
+    /// UID of the contact (sender or recipient)
+    pub target_uid: Option<String>,
+    /// IP address and port of the contact
+    pub target_ip: Option<String>,
+    /// HTTP status code
+    pub status_code: Option<i32>,
+    /// Whether the request succeeded
+    pub success: bool,
+    /// Error message if request failed
+    pub error_message: Option<String>,
+    /// Response data from peer
+    pub response_data: Option<String>,
+}
+
 /// SQLite-based storage manager
 pub struct Storage {
     conn: Connection,
@@ -114,6 +139,23 @@ impl Storage {
             [],
         )?;
 
+        // Request logs table for debugging network issues
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS request_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                direction TEXT NOT NULL,
+                request_type TEXT NOT NULL,
+                target_uid TEXT,
+                target_ip TEXT,
+                status_code INTEGER,
+                success INTEGER NOT NULL,
+                error_message TEXT,
+                response_data TEXT
+            )",
+            [],
+        )?;
+
         // Create indexes for better query performance
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_uid)",
@@ -122,6 +164,16 @@ impl Storage {
 
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_timestamp ON request_logs(timestamp)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_target ON request_logs(target_uid)",
             [],
         )?;
 
@@ -384,6 +436,105 @@ impl Storage {
         Ok(result)
     }
 
+    // ========== Request Logs ==========
+
+    /// Log an outgoing or incoming request
+    pub fn log_request(
+        &self,
+        direction: &str,
+        request_type: &str,
+        target_uid: Option<&str>,
+        target_ip: Option<&str>,
+        status_code: Option<i32>,
+        success: bool,
+        error_message: Option<&str>,
+        response_data: Option<&str>,
+    ) -> Result<()> {
+        let timestamp = chrono::Utc::now().timestamp_millis();
+
+        self.conn.execute(
+            "INSERT INTO request_logs (timestamp, direction, request_type, target_uid, target_ip, status_code, success, error_message, response_data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                timestamp,
+                direction,
+                request_type,
+                target_uid,
+                target_ip,
+                status_code,
+                success as i32,
+                error_message,
+                response_data,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent request logs
+    pub fn get_request_logs(&self, limit: usize) -> Result<Vec<RequestLog>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, direction, request_type, target_uid, target_ip, status_code, success, error_message, response_data
+             FROM request_logs
+             ORDER BY timestamp DESC
+             LIMIT ?1",
+        )?;
+
+        let logs = stmt.query_map(params![limit], |row| {
+            Ok(RequestLog {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                direction: row.get(2)?,
+                request_type: row.get(3)?,
+                target_uid: row.get(4)?,
+                target_ip: row.get(5)?,
+                status_code: row.get(6)?,
+                success: row.get::<_, i32>(7)? != 0,
+                error_message: row.get(8)?,
+                response_data: row.get(9)?,
+            })
+        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(logs)
+    }
+
+    /// Get request logs for a specific contact
+    pub fn get_request_logs_for_contact(&self, uid: &str, limit: usize) -> Result<Vec<RequestLog>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, direction, request_type, target_uid, target_ip, status_code, success, error_message, response_data
+             FROM request_logs
+             WHERE target_uid = ?1
+             ORDER BY timestamp DESC
+             LIMIT ?2",
+        )?;
+
+        let logs = stmt.query_map(params![uid, limit], |row| {
+            Ok(RequestLog {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                direction: row.get(2)?,
+                request_type: row.get(3)?,
+                target_uid: row.get(4)?,
+                target_ip: row.get(5)?,
+                status_code: row.get(6)?,
+                success: row.get::<_, i32>(7)? != 0,
+                error_message: row.get(8)?,
+                response_data: row.get(9)?,
+            })
+        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(logs)
+    }
+
+    /// Clear old request logs (keep last N days)
+    pub fn clear_old_request_logs(&self, keep_days: i64) -> Result<()> {
+        let cutoff = chrono::Utc::now().timestamp_millis() - (keep_days * 24 * 60 * 60 * 1000);
+        self.conn.execute(
+            "DELETE FROM request_logs WHERE timestamp <= ?1",
+            params![cutoff],
+        )?;
+        Ok(())
+    }
+
     // ========== Utility ==========
 
     /// Clear all data (for testing)
@@ -393,6 +544,7 @@ impl Storage {
         self.conn.execute("DELETE FROM contacts", [])?;
         self.conn.execute("DELETE FROM user_identity", [])?;
         self.conn.execute("DELETE FROM settings", [])?;
+        self.conn.execute("DELETE FROM request_logs", [])?;
         Ok(())
     }
 }

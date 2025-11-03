@@ -42,7 +42,7 @@ cargo fmt
 - `settings.rs` - Application settings struct
 - `settings_manager.rs` - Thread-safe SettingsManager (legacy, unused in TUI)
 - `app_state.rs` - AppState with SQLite persistence methods (`save_to_db`, `load_from_db`, `migrate_from_json`)
-- `storage_db.rs` - SQLite storage backend (user identity, contacts, chats, messages, settings)
+- `storage_db.rs` - SQLite storage backend (user identity, contacts, chats, messages, settings, request logs)
 - `mod.rs` - Public API with re-exports
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
@@ -85,17 +85,26 @@ cargo fmt
 - `storage` - SQLite storage instance (file-based for production, in-memory for tests)
 - `state_path` - Legacy path for JSON migration (auto-migrates `app_state.json` to SQLite on first run)
 - `transport` - HTTP transport layer for sending/receiving messages and pings
+- `transport_server_status` - Tracks server state: NotStarted | Starting | Running(port) | Failed(error)
 - `queue` - SQLite-backed message queue in `./app_data/message_queue.db`
 - `connectivity_result` - Stores startup/latest connectivity test results
 - `local_ip` - Automatically updated from connectivity results (external IP:port)
 - `local_port` - Port for listening and connectivity tests (smart selection: reuses saved port when IP unchanged, generates new random port 49152-65535 when IP changes or first run)
 - `diagnostics_refresh_handle` - Background thread handle for async connectivity tests
-- Startup: Migrates legacy JSON if exists, loads all data from SQLite, starts transport server, runs `establish_connectivity()` in background
-- Transport: Runs HTTP server in background thread, handlers create new SQLite connections to persist incoming pings/messages
+- Startup: Migrates legacy JSON if exists, loads all data from SQLite, starts transport server with auto-retry (up to 10 attempts), runs `establish_connectivity()` in background
+- Transport Server Lifecycle: **Critical - server starts FIRST and runs independently of connectivity**
+  - Starts in dedicated thread with persistent tokio runtime (kept alive via oneshot channel)
+  - Binds to preferred port or tries up to 10 random ports (49152-65535) if unavailable
+  - Verifies server listening via local `/health` check after each bind attempt
+  - Saves actual running port to database for next restart
+  - **Stays running until app exit**, independent of connectivity success/failure
+  - Handlers create new SQLite connections to persist incoming pings/messages
+  - Connectivity detection runs AFTER server starts, uses actual running port for port mappings
 - State Reload: Automatically reloads from SQLite when navigating (chat list, chat view, main menu) to pick up transport handler changes
 - ShareContact: Uses detected external IP for accurate contact tokens
 - ImportContact: Automatically sends ping to imported contact to notify them, marks chat as active when ping response received
 - Persistence: Auto-saves to SQLite after import/send/delete/settings operations, transport handlers independently persist changes
+- Error Handling: Visual warnings on main menu (cyan "Starting...", yellow "Configuring...", red "Failed" with detailed error)
 
 ## TUI Architecture
 
@@ -127,7 +136,11 @@ cargo fmt
 - `helpers.rs` - Shared UI utilities (`format_duration_until`)
 
 **Screens:**
-1. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n), shows yellow warning during connectivity setup, shows red error block if all connectivity attempts fail
+1. **MainMenu** - Navigate features (↑↓/j/k, Enter), quick access hotkeys (c/s/i/n). Visual status indicators:
+   - **Cyan ⏳** "Starting transport server..." - While server is initializing
+   - **Yellow ⚠** "Configuring network connectivity..." - While running connectivity tests
+   - **Red ✗** "Transport server failed: [error]" - If server fails to start after 10 retry attempts
+   - **Red ✗** "All connectivity attempts failed" - If all NAT traversal protocols fail (PCP, NAT-PMP, UPnP, HTTP)
 2. **ShareContact** - Generate tokens (copy/save), shows UID/IP (auto-detected external IP), 24-hour expiry countdown
 3. **ImportContact** - Parse/validate tokens, expiry check, signature verification, rejects self-import, automatically creates new chat with ⌛ Pending status, sends ping with sender's contact token to enable automatic two-way exchange (background thread)
 4. **ChatList** - Status badges (⚠ Expired | ⌛ Pending | ● New | ○ Read), delete with confirmation
@@ -173,10 +186,22 @@ cargo fmt
 
 ### Transport
 - Hyper HTTP/1.1 server/client
-- Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new)
+- Endpoints: `/output` (legacy), `/ping` (connectivity with PingRequest/PingResponse), `/message` (new), `/health` (connectivity verification)
 - Handlers: MessageHandler (legacy), NewMessageHandler (AppState), PingHandler (auto-import contacts)
 - **PingRequest**: `{contact_token: String}` - signed contact token (base64 CBOR) sent on import
 - **PingResponse**: `{uid: String, status: String}` - confirms peer is online
+- **Health Endpoint**: `GET /health` returns "ok" - used for external reachability verification
+- **Server Lifecycle (Critical Architecture)**:
+  1. **Startup**: Server starts FIRST in dedicated thread with persistent tokio runtime
+  2. **Runtime persistence**: Tokio runtime kept alive via oneshot channel (blocks on `rx.await` that never receives)
+  3. **Port binding**: Attempts preferred port (from database), tries up to 10 random ports (49152-65535) if unavailable
+  4. **Verification**: Each bind attempt verified via local `/health` check (100ms wait + GET request)
+  5. **Database sync**: Actual running port saved to database for next restart
+  6. **Status tracking**: `TransportServerStatus` enum: NotStarted → Starting → Running(port) or Failed(error)
+  7. **Independence**: Server runs until app exit, **independent of connectivity success/failure**
+  8. **Connectivity order**: Connectivity detection waits for server to be Running, then uses actual port for NAT traversal
+  9. **UI feedback**: Cyan "Starting..." → green (silent) or red "Failed: [error]" on main menu
+- **Why runtime persistence matters**: Without keeping runtime alive, spawned server task would be dropped when setup completes, causing "Connection refused" for all incoming requests
 - **Automatic two-way exchange**:
   1. Alice imports Bob → creates chat (⌛ Pending) → sends ping with Alice's token
   2. Bob receives ping → parses token → auto-imports Alice → creates chat (● Active) → responds "ok"
@@ -211,14 +236,112 @@ cargo fmt
 - `storage_db.rs` - SQLite storage backend with schema and CRUD operations
 - `mod.rs` - Public API with re-exports
 
-**SQLite Schema**:
-- `user_identity` - Single row: Ed25519/X25519 keypairs, UID, IP, port
-- `contacts` - Contact list: UID (PK), IP, pubkeys, expiry, is_active
-- `chats` - Conversations: contact_uid (PK, FK), is_active, has_pending_messages
-- `messages` - All messages: ID (PK), sender, receiver, content, timestamp, chat_uid (FK)
-- `settings` - Single row: All application settings
-- Foreign keys with CASCADE delete (chats → contacts, messages → chats)
-- Indexes on messages (chat_uid, timestamp) for performance
+**SQLite Schema** (`./app_data/pure2p.db`):
+
+```sql
+-- User Identity (single row, id=1 enforced)
+CREATE TABLE user_identity (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    public_key BLOB NOT NULL,           -- Ed25519 public key (32 bytes)
+    private_key BLOB NOT NULL,          -- Ed25519 private key (32 bytes)
+    x25519_public BLOB NOT NULL,        -- X25519 public key (32 bytes)
+    x25519_secret BLOB NOT NULL,        -- X25519 secret key (32 bytes)
+    uid TEXT NOT NULL,                  -- SHA-256(public_key) first 16 bytes as hex
+    ip TEXT,                            -- External IP:port (e.g., "203.0.113.5:54321")
+    port INTEGER NOT NULL               -- Listening port
+);
+
+-- Contacts
+CREATE TABLE contacts (
+    uid TEXT PRIMARY KEY,               -- Contact's UID
+    ip TEXT NOT NULL,                   -- Contact's IP:port
+    pubkey BLOB NOT NULL,               -- Ed25519 public key (32 bytes)
+    x25519_pubkey BLOB NOT NULL,        -- X25519 public key (32 bytes)
+    expiry INTEGER NOT NULL,            -- Unix timestamp (seconds)
+    is_active INTEGER NOT NULL          -- 1=active, 0=inactive (boolean)
+);
+
+-- Chats
+CREATE TABLE chats (
+    contact_uid TEXT PRIMARY KEY,       -- Foreign key to contacts(uid)
+    is_active INTEGER NOT NULL,         -- 1=active, 0=inactive (boolean)
+    has_pending_messages INTEGER NOT NULL,  -- 1=has pending, 0=none (boolean)
+    FOREIGN KEY (contact_uid) REFERENCES contacts(uid) ON DELETE CASCADE
+);
+
+-- Messages
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,                -- UUIDv4
+    sender TEXT NOT NULL,               -- Sender UID
+    receiver TEXT NOT NULL,             -- Receiver UID
+    content BLOB NOT NULL,              -- Message content (plaintext or encrypted)
+    timestamp INTEGER NOT NULL,         -- Unix timestamp (milliseconds)
+    chat_uid TEXT NOT NULL,             -- Foreign key to chats(contact_uid)
+    FOREIGN KEY (chat_uid) REFERENCES chats(contact_uid) ON DELETE CASCADE
+);
+
+-- Settings (single row, id=1 enforced)
+CREATE TABLE settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    default_contact_expiry_days INTEGER NOT NULL,   -- Default: 1
+    auto_accept_contacts INTEGER NOT NULL,          -- Boolean
+    max_message_retries INTEGER NOT NULL,           -- Default: 5
+    retry_base_delay_ms INTEGER NOT NULL,           -- Default: 1000
+    enable_notifications INTEGER NOT NULL,          -- Boolean
+    global_retry_interval_ms INTEGER NOT NULL,      -- Default: 60000
+    retry_interval_minutes INTEGER NOT NULL,        -- Default: 1
+    storage_path TEXT NOT NULL                      -- Default: "./app_data"
+);
+
+-- Request Logs (for network debugging)
+CREATE TABLE request_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp INTEGER NOT NULL,         -- Unix timestamp (milliseconds)
+    direction TEXT NOT NULL,            -- "outgoing" or "incoming"
+    request_type TEXT NOT NULL,         -- "ping", "text", "delete", etc.
+    target_uid TEXT,                    -- Contact UID (sender or recipient)
+    target_ip TEXT,                     -- Contact IP:port
+    status_code INTEGER,                -- HTTP status code (200, 404, etc.)
+    success INTEGER NOT NULL,           -- 1=success, 0=failed (boolean)
+    error_message TEXT,                 -- Error details if failed
+    response_data TEXT                  -- Response from peer
+);
+
+-- Indexes for performance
+CREATE INDEX idx_messages_chat ON messages(chat_uid);
+CREATE INDEX idx_messages_timestamp ON messages(timestamp);
+CREATE INDEX idx_request_logs_timestamp ON request_logs(timestamp);
+CREATE INDEX idx_request_logs_target ON request_logs(target_uid);
+```
+
+**Message Queue Schema** (`./app_data/message_queue.db`):
+
+```sql
+-- Message Queue (SQLite-backed retry queue)
+CREATE TABLE message_queue (
+    message_id TEXT PRIMARY KEY,        -- UUIDv4
+    target_uid TEXT NOT NULL,           -- Recipient UID
+    message_type TEXT NOT NULL,         -- "text" or "ping"
+    payload BLOB NOT NULL,              -- Serialized message envelope
+    last_attempt INTEGER,               -- Unix timestamp of last attempt
+    retry_count INTEGER NOT NULL DEFAULT 0,  -- Number of attempts
+    sender TEXT NOT NULL,               -- Sender UID
+    recipient TEXT NOT NULL,            -- Recipient UID
+    content BLOB NOT NULL,              -- Message content
+    timestamp INTEGER NOT NULL,         -- Unix timestamp (milliseconds)
+    priority INTEGER NOT NULL,          -- 0=Low, 1=Normal, 2=High, 3=Urgent
+    next_retry INTEGER NOT NULL,        -- Unix timestamp for next retry
+    created_at INTEGER NOT NULL         -- Unix timestamp when queued
+);
+```
+
+**Schema Notes**:
+- **Foreign keys**: CASCADE delete ensures referential integrity (delete contact → delete chat → delete messages)
+- **Indexes**: Optimized queries on messages (chat_uid + timestamp)
+- **Single-row tables**: `user_identity` and `settings` use `CHECK (id = 1)` constraint
+- **Booleans**: SQLite stores as INTEGER (1=true, 0=false)
+- **Timestamps**: User identity/contacts use seconds, messages/queue use milliseconds
+- **BLOBs**: Cryptographic keys stored as raw bytes, content can be plaintext or encrypted
 
 **Contact Tokens**:
 - Signed with Ed25519, base64 CBOR format: `{payload: {ip, pubkey, x25519_pubkey, expiry}, signature: [u8; 64]}`
@@ -266,8 +389,8 @@ cargo fmt
 
 ### Connectivity
 
-**Module Architecture** (11 files, ~90-400 lines each):
-- `types.rs` - Shared types: PortMappingResult, MappingProtocol (PCP/NATPMP/UPnP/IPv6/Direct/Manual), MappingError, ConnectivityResult (with cgnat_detected field), StrategyAttempt, IpProtocol
+**Module Architecture** (12 files, ~90-400 lines each):
+- `types.rs` - Shared types: PortMappingResult, MappingProtocol (PCP/NATPMP/UPnP/IPv6/Direct/Manual), MappingError, ConnectivityResult (with cgnat_detected and externally_reachable fields), StrategyAttempt, IpProtocol
 - `gateway.rs` - Cross-platform gateway discovery (Linux/macOS/Windows)
 - `pcp.rs` - PCP implementation with PcpOpcode, PcpResultCode enums
 - `natpmp.rs` - NAT-PMP implementation with NatPmpOpcode, NatPmpResultCode enums
@@ -275,13 +398,14 @@ cargo fmt
 - `ipv6.rs` - IPv6 detection helpers (check_ipv6_connectivity, is_ipv6_link_local)
 - `http_ip.rs` - HTTP-based external IP detection using public services (api.ipify.org, ifconfig.me, icanhazip.com, checkip.amazonaws.com)
 - `cgnat.rs` - CGNAT detection: detect_cgnat(ip) checks 100.64.0.0/10 range, is_private_ip(ip) helper
-- `orchestrator.rs` - Main `establish_connectivity()` function
+- `health_check.rs` - External reachability verification (verify_external_reachability, ReachabilityStatus enum)
+- `orchestrator.rs` - Main `establish_connectivity()` and `verify_connectivity_health()` functions
 - `manager.rs` - PortMappingManager (PCP), UpnpMappingManager (UPnP)
 - `mod.rs` - Public API with re-exports
 
 **Orchestrator Behavior**:
 - `establish_connectivity(port)` tries IPv6 → PCP → NAT-PMP → UPnP → HTTP IP detection sequentially
-- Returns `ConnectivityResult` with full tracking of all attempts + CGNAT detection
+- Returns `ConnectivityResult` with full tracking of all attempts + CGNAT detection + reachability status
 - Each protocol gets `StrategyAttempt`: NotAttempted | Success(mapping) | Failed(error)
 - Stops on first success, continues through all on failure
 - **HTTP fallback**: When all NAT traversal fails, queries public IP services to detect external IP (creates mapping with `protocol: Direct`, `lifetime_secs: 0`)
@@ -290,6 +414,11 @@ cargo fmt
 - **Automatic on startup**: TUI triggers connectivity test in background thread on app launch
 - **Manual refresh**: Diagnostics screen 'r'/F5 keys trigger new background test
 - Results stored in `App.connectivity_result`, external IP auto-updates `App.local_ip`
+- **Health check verification**: After connectivity established + transport server started (2s delay), automatically tests external reachability via GET /health endpoint
+  - `verify_connectivity_health(result)` updates `ConnectivityResult.externally_reachable` field
+  - `None` = not tested, `Some(true)` = confirmed reachable, `Some(false)` = port blocked/unreachable
+  - Logs helpful diagnostics: firewall, CGNAT, silent mapping failure, or testing from same NAT
+  - Diagnostics screen shows real-time status: Green "✓ Reachable" or Red "✗ Not reachable"
 
 **Protocol Details**:
 - **PCP** (RFC 6887): 60-byte MAP requests, up to 1100-byte responses, UDP port 5351
@@ -307,7 +436,7 @@ cargo fmt
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (387 total tests)
+- All tests in `src/tests/` directory (409 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -316,18 +445,19 @@ cargo fmt
 **Test Organization:**
 - `crypto_tests.rs` (27 tests) - Keypair generation, signing, UID derivation, X25519 shared secret, AEAD encryption (roundtrip, tampering), token signing (valid, invalid, corrupted)
 - `protocol_tests.rs` (25 tests) - Message envelope serialization, versioning, E2E encryption (roundtrip, wrong key, CBOR/JSON, plaintext vs encrypted)
-- `transport_tests.rs` (26 tests) - HTTP endpoints, peer management, delivery
+- `transport_tests.rs` (36 tests) - HTTP endpoints (/output, /ping, /message, /health), peer management, delivery, health check integration, request logging (ping/message success/failure, incoming logging)
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
-- `connectivity_tests.rs` (38 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT, HTTP IP detection
+- `connectivity_tests.rs` (49 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT, HTTP IP detection, health check verification, reachability status
 - `lib_tests.rs` (1 test) - Library initialization
 
-**`storage_tests/` (66 tests):**
+**`storage_tests/` (83 tests):**
 - `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
 - `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
 - `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
 - `app_state_tests.rs` (21 tests) - AppState (JSON/CBOR legacy methods + 10 new SQLite tests: save/load, messages, updates, migration, settings)
 - `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
+- `request_log_tests.rs` (17 tests) - Request logging (CRUD, filtering by contact, timestamp ordering, cleanup, various status codes)
 
 **`tui_tests/` (128 tests):**
 - `app_tests/` (42 tests) - App business logic, modularized by feature area:
