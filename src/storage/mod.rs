@@ -31,7 +31,7 @@ pub use contact::Contact;
 pub use message::{DeliveryStatus, Message};
 pub use settings::Settings;
 pub use settings_manager::SettingsManager;
-pub use storage_db::Storage;
+pub use storage_db::{RequestLog, Storage};
 
 // Re-export main functions
 pub use contact::{generate_contact_token, parse_contact_token};

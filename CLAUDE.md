@@ -42,7 +42,7 @@ cargo fmt
 - `settings.rs` - Application settings struct
 - `settings_manager.rs` - Thread-safe SettingsManager (legacy, unused in TUI)
 - `app_state.rs` - AppState with SQLite persistence methods (`save_to_db`, `load_from_db`, `migrate_from_json`)
-- `storage_db.rs` - SQLite storage backend (user identity, contacts, chats, messages, settings)
+- `storage_db.rs` - SQLite storage backend (user identity, contacts, chats, messages, settings, request logs)
 - `mod.rs` - Public API with re-exports
 
 **`queue`** - SQLite-backed retry queue, priority ordering, exponential backoff, startup retry
@@ -283,9 +283,25 @@ CREATE TABLE settings (
     storage_path TEXT NOT NULL                      -- Default: "./app_data"
 );
 
+-- Request Logs (for network debugging)
+CREATE TABLE request_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp INTEGER NOT NULL,         -- Unix timestamp (milliseconds)
+    direction TEXT NOT NULL,            -- "outgoing" or "incoming"
+    request_type TEXT NOT NULL,         -- "ping", "text", "delete", etc.
+    target_uid TEXT,                    -- Contact UID (sender or recipient)
+    target_ip TEXT,                     -- Contact IP:port
+    status_code INTEGER,                -- HTTP status code (200, 404, etc.)
+    success INTEGER NOT NULL,           -- 1=success, 0=failed (boolean)
+    error_message TEXT,                 -- Error details if failed
+    response_data TEXT                  -- Response from peer
+);
+
 -- Indexes for performance
 CREATE INDEX idx_messages_chat ON messages(chat_uid);
 CREATE INDEX idx_messages_timestamp ON messages(timestamp);
+CREATE INDEX idx_request_logs_timestamp ON request_logs(timestamp);
+CREATE INDEX idx_request_logs_target ON request_logs(target_uid);
 ```
 
 **Message Queue Schema** (`./app_data/message_queue.db`):
@@ -410,7 +426,7 @@ CREATE TABLE message_queue (
 ## Testing
 
 **Structure:**
-- All tests in `src/tests/` directory (387 total tests)
+- All tests in `src/tests/` directory (409 total tests)
 - Pattern: `test_<feature>_<scenario>`
 - Test both success and failure paths
 - Organized in subdirectories mirroring module structure
@@ -419,18 +435,19 @@ CREATE TABLE message_queue (
 **Test Organization:**
 - `crypto_tests.rs` (27 tests) - Keypair generation, signing, UID derivation, X25519 shared secret, AEAD encryption (roundtrip, tampering), token signing (valid, invalid, corrupted)
 - `protocol_tests.rs` (25 tests) - Message envelope serialization, versioning, E2E encryption (roundtrip, wrong key, CBOR/JSON, plaintext vs encrypted)
-- `transport_tests.rs` (31 tests) - HTTP endpoints (/output, /ping, /message, /health), peer management, delivery, health check integration
+- `transport_tests.rs` (36 tests) - HTTP endpoints (/output, /ping, /message, /health), peer management, delivery, health check integration, request logging (ping/message success/failure, incoming logging)
 - `queue_tests.rs` (34 tests) - SQLite queue, priority, retry logic
 - `messaging_tests.rs` (17 tests) - High-level messaging API
 - `connectivity_tests.rs` (49 tests) - PCP, NAT-PMP, UPnP, orchestrator, IPv6, CGNAT, HTTP IP detection, health check verification, reachability status
 - `lib_tests.rs` (1 test) - Library initialization
 
-**`storage_tests/` (66 tests):**
+**`storage_tests/` (83 tests):**
 - `contact_tests.rs` (11 tests) - Contact struct (creation, expiry, activation, serialization)
 - `token_tests.rs` (16 tests) - Signed token generation/parsing (roundtrip, validation, signature verification, tampering detection, wrong signer)
 - `chat_tests.rs` (9 tests) - Chat/Message structs (append, active management, pending flags)
 - `app_state_tests.rs` (21 tests) - AppState (JSON/CBOR legacy methods + 10 new SQLite tests: save/load, messages, updates, migration, settings)
 - `settings_tests.rs` (16 tests) - Settings/SettingsManager (defaults, persistence, concurrency)
+- `request_log_tests.rs` (17 tests) - Request logging (CRUD, filtering by contact, timestamp ordering, cleanup, various status codes)
 
 **`tui_tests/` (128 tests):**
 - `app_tests/` (42 tests) - App business logic, modularized by feature area:
