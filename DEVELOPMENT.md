@@ -287,6 +287,22 @@ sudo apt-get install pkg-config libssl-dev
 - Check SQLite locks: `rm -rf target/` and rebuild
 - Use `-- --test-threads=1` to run sequentially
 
+**Main menu shows red "Transport server failed" error:**
+- Transport server failed to bind after 10 retry attempts
+- Possible causes:
+  - All random ports in range 49152-65535 are in use (very rare)
+  - Firewall blocking all incoming connections
+  - Operating system resource limits (too many open files/sockets)
+  - Another instance of the app is already running
+- Solutions:
+  - Check for other pure2p-tui processes: `ps aux | grep pure2p-tui`
+  - Check available ports: `lsof -nP -iTCP -sTCP:LISTEN | wc -l`
+  - Restart the app (will try different ports)
+  - Check system logs for detailed error messages
+  - Temporarily disable firewall to test if it's the cause
+- The app automatically tries 10 different random ports before giving up
+- Each port is verified by testing the `/health` endpoint locally
+
 **Contact token invalid after restart:**
 - App now intelligently reuses the same port when on the same network
 - Port only changes when your external IP changes (different network)

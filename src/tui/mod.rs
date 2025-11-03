@@ -12,5 +12,5 @@ pub mod clipboard;
 // Re-export main types for convenience
 pub use types::{Screen, MenuItem};
 pub use screens::*;
-pub use app::App;
+pub use app::{App, TransportServerStatus};
 pub use clipboard::{ClipboardProvider, RealClipboard};
