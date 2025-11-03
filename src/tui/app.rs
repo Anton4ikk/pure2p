@@ -882,8 +882,10 @@ impl App {
             // Add contact to list
             self.app_state.contacts.push(contact.clone());
 
-            // Create a new chat for this contact
-            let new_chat = crate::storage::Chat::new(contact_uid);
+            // Create a new chat for this contact with pending status
+            // (will be updated to active if ping succeeds)
+            let mut new_chat = crate::storage::Chat::new(contact_uid.clone());
+            new_chat.mark_has_pending(); // Mark as pending until ping succeeds
             self.app_state.chats.push(new_chat);
 
             // Auto-save after importing contact and creating chat

@@ -101,14 +101,15 @@ fn test_app_import_valid_contact() {
     let created_chat = app.app_state.chats.iter().find(|c| c.contact_uid == contact.uid);
     assert!(created_chat.is_some(), "Chat should be created for imported contact");
 
-    // Note: The ping is sent in a background thread, so we can't reliably test
-    // has_pending_messages immediately. The ping will fail (unreachable IP) and
-    // get queued, but timing is non-deterministic in tests.
-    // In production, the pending status will show correctly after reload_state()
+    // Verify the chat is marked as pending immediately (before ping attempt)
     let chat = created_chat.unwrap();
     assert!(
         !chat.is_active,
-        "Newly created chat should not be active (no messages yet)"
+        "Newly created chat should not be active (ping hasn't succeeded yet)"
+    );
+    assert!(
+        chat.has_pending_messages,
+        "Chat should be marked as having pending messages (ping will be attempted/queued)"
     );
 }
 
